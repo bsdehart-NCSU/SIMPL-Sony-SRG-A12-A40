@@ -1,0 +1,2231 @@
+/*******************************************************************************************
+  SIMPL+ Module Information
+*******************************************************************************************/
+/*
+Dealer Name: NC State DELTA
+System Name: Sony SRG-A40 / SRG-A12 VISCA over IP Control v1.0
+Programmer: Brandon DeHart / Gemini 2.5 Pro
+Comments: This module provides comprehensive VISCA over IP control for Sony SRG-A40
+          and SRG-A12 cameras, with integrated support for the C2N-CAMIDJ joystick.
+*/
+
+//================================================================================
+// COMPILER DIRECTIVES
+//================================================================================
+#SYMBOL_NAME "Sony SRG-A40 A12 VISCA IP C2N-CAMIDJ v1.1"
+#HINT "Full VISCA over IP control for Sony SRG-A40/A12 with C2N-CAMIDJ support."
+#PRINT_TO_TRACE
+#ENABLE_STACK_CHECKING
+#CATEGORY "19" // Camera
+#HELP_PDF_FILE "SRG-A12_A40 C2N-CAMIDJ Help File.pdf"
+
+//================================================================================
+// CONSTANTS
+//================================================================================
+#DEFINE_CONSTANT MAX_BUFFER_SIZE 1024
+#DEFINE_CONSTANT MAX_COMMAND_SIZE 50
+#DEFINE_CONSTANT JOYSTICK_DEADBAND 512
+#DEFINE_CONSTANT COMMAND_DELAY_MS 50
+#DEFINE_CONSTANT RESPONSE_TIMEOUT_HS 300 // 3 seconds (300 hundredths)
+                  
+// Initialization State Constants
+#DEFINE_CONSTANT INIT_STATE_START                 0
+#DEFINE_CONSTANT INIT_STATE_WAIT_RESET_ACK        1
+
+// VISCA Packet Constants
+#DEFINE_CONSTANT VISCA_TERMINATOR "\xFF"
+
+// C2N-CAMIDJ Mode Constants
+#DEFINE_CONSTANT MODE_FOCUS             0
+#DEFINE_CONSTANT MODE_IRIS              1
+#DEFINE_CONSTANT MODE_ZOOM_SPEED        2
+#DEFINE_CONSTANT MODE_PAN_SPEED         3
+#DEFINE_CONSTANT MODE_TILT_SPEED        4
+#DEFINE_CONSTANT MODE_AE_AUTO           5
+#DEFINE_CONSTANT MODE_DEFAULT           99 // New: Represents the blank/inactive mode
+
+// C2N-CAMIDJ Speed Constants
+#DEFINE_CONSTANT SPEED_SLOW             0
+#DEFINE_CONSTANT SPEED_FAST             1
+
+// New C2N-CAMIDJ Timeout Constant
+#DEFINE_CONSTANT MODE_TIMEOUT_S         3000 // 30 seconds (3000 hundredths)
+#DEFINE_CONSTANT MODE_CHECK_INTERVAL    100  // 1 second (100 hundredths) for the checker loop
+
+//================================================================================
+// INPUTS AND OUTPUTS (Organized and Aligned by Function)
+//================================================================================
+
+//-------------------- Digital Inputs / Outputs --------------------
+//-------------------- System & Power --------------------
+DIGITAL_INPUT  Power_On_trig;                   DIGITAL_OUTPUT Is_On_fb;
+DIGITAL_INPUT  Power_Off_trig;                  DIGITAL_OUTPUT Is_Off_fb;
+DIGITAL_INPUT  Query_All_Status_trig;           DIGITAL_OUTPUT Is_Standby_fb;
+DIGITAL_INPUT  Set_Standby_Mode_Side_trig;      DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Standby_Mode_Neutral_trig;   DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Video_Mute_On_trig;              DIGITAL_OUTPUT Video_Is_Muted_fb;
+DIGITAL_INPUT  Video_Mute_Off_trig;				DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Image Toggles & Modes --------------------
+DIGITAL_INPUT  Image_Flip_On_trig;              DIGITAL_OUTPUT Is_Image_Flip_On_fb;
+DIGITAL_INPUT  Image_Flip_Off_trig;             DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Image_Stabilizer_On_trig;        DIGITAL_OUTPUT Is_Image_Stabilizer_On_fb;
+DIGITAL_INPUT  Image_Stabilizer_Off_trig;       DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Flicker_Cancel_On_trig;          DIGITAL_OUTPUT Is_Flicker_Cancel_On_fb;
+DIGITAL_INPUT  Flicker_Cancel_Off_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Defog_On_trig;                   DIGITAL_OUTPUT Is_Defog_On_fb;
+DIGITAL_INPUT  Defog_Off_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Picture_Effect_BW_trig;          DIGITAL_OUTPUT Is_Picture_Effect_BW_On_fb;
+DIGITAL_INPUT  Picture_Effect_Off_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Tele_Convert_On_trig;            DIGITAL_OUTPUT Is_Tele_Convert_On_fb;
+DIGITAL_INPUT  Tele_Convert_Off_trig;           DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  WDR_On_trig;                     DIGITAL_OUTPUT WDR_Is_On_fb;
+DIGITAL_INPUT  WDR_Off_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Exposure & Color --------------------
+DIGITAL_INPUT  Exposure_Mode_Auto_trig;         DIGITAL_OUTPUT Is_AE_Mode_Auto_fb;
+DIGITAL_INPUT  Exposure_Mode_Manual_trig;       DIGITAL_OUTPUT Is_AE_Mode_Manual_fb;
+DIGITAL_INPUT  Exposure_Mode_Shutter_Priority_trig; DIGITAL_OUTPUT Is_AE_Mode_Shutter_Priority_fb;
+DIGITAL_INPUT  Exposure_Mode_Iris_Priority_trig;DIGITAL_OUTPUT Is_AE_Mode_Iris_Priority_fb;
+DIGITAL_INPUT  High_Sensitivity_On_trig;        DIGITAL_OUTPUT Is_High_Sensitivity_On_fb;
+DIGITAL_INPUT  High_Sensitivity_Off_trig;       DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Backlight_Comp_On_trig;          DIGITAL_OUTPUT Backlight_Is_On_fb;
+DIGITAL_INPUT  Backlight_Comp_Off_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Exposure_Comp_On_trig;           DIGITAL_OUTPUT Is_Exposure_Comp_On_fb;
+DIGITAL_INPUT  Exposure_Comp_Off_trig;          DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  WB_Mode_Auto_trig;               DIGITAL_OUTPUT Is_WB_Mode_Auto_fb;
+DIGITAL_INPUT  WB_Mode_Indoor_trig;             DIGITAL_OUTPUT Is_WB_Mode_Indoor_fb;
+DIGITAL_INPUT  WB_Mode_Outdoor_trig;            DIGITAL_OUTPUT Is_WB_Mode_Outdoor_fb;
+DIGITAL_INPUT  WB_Mode_One_Push_trig;           DIGITAL_OUTPUT Is_WB_Mode_One_Push_fb;
+DIGITAL_INPUT  WB_Mode_Manual_trig;             DIGITAL_OUTPUT Is_WB_Mode_Manual_fb;
+DIGITAL_INPUT  Trigger_One_Push_WB_Calibrate_trig; DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Pan & Tilt --------------------
+DIGITAL_INPUT  Pan_Left_trig;                   DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Pan_Right_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Tilt_Up_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Tilt_Down_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Go_Home_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Pan_Tilt_Reset_trig;             DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Absolute_Position_trig;      DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Zoom & Focus --------------------
+DIGITAL_INPUT  Zoom_In_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Zoom_Out_trig;                   DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Zoom_Position_trig;          DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Auto_Focus_On_trig;              DIGITAL_OUTPUT Is_Auto_Focus_On_fb;
+DIGITAL_INPUT  Auto_Focus_Off_trig;             DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Auto_Focus_Toggle_trig;          DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Trigger_One_Push_Focus_trig;     DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Focus_Far_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Focus_Near_trig;                 DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Manual Value Controls --------------------
+DIGITAL_INPUT  Iris_Up_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Iris_Down_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Gain_Up_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Gain_Down_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Shutter_Up_trig;                 DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Shutter_Down_trig;               DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Exposure_Comp_Up_trig;           DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Exposure_Comp_Down_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Exposure_Comp_Reset_trig;        DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Direct Set Triggers --------------------
+DIGITAL_INPUT  Set_Iris_Level_trig;             DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Gain_Level_trig;             DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Shutter_Level_trig;          DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Red_Gain_Level_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Blue_Gain_Level_trig;        DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Aperture_Level_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_Exposure_Comp_Level_trig;    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_AE_Speed_trig;               DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Set_WB_Offset_trig;              DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Presets --------------------
+DIGITAL_INPUT  Store_Preset_trig;               DIGITAL_OUTPUT Store_Preset_Active;
+DIGITAL_INPUT  Recall_Preset_trig;              DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Clear_Preset_trig;               DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Recall_Preset_1_trig;            DIGITAL_OUTPUT Preset_1_Active_fb;
+DIGITAL_INPUT  Recall_Preset_2_trig;            DIGITAL_OUTPUT Preset_2_Active_fb;
+DIGITAL_INPUT  Recall_Preset_3_trig;            DIGITAL_OUTPUT Preset_3_Active_fb;
+DIGITAL_INPUT  Recall_Preset_4_trig;            DIGITAL_OUTPUT Preset_4_Active_fb;
+DIGITAL_INPUT  Recall_Preset_5_trig;            DIGITAL_OUTPUT Preset_5_Active_fb;
+DIGITAL_INPUT  Recall_Preset_6_trig;            DIGITAL_OUTPUT Preset_6_Active_fb;
+DIGITAL_INPUT  Recall_Preset_7_trig;            DIGITAL_OUTPUT Preset_7_Active_fb;
+DIGITAL_INPUT  Recall_Preset_8_trig;            DIGITAL_OUTPUT Preset_8_Active_fb;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Menu Navigation & Tally --------------------
+DIGITAL_INPUT  Menu_On_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Off_trig;                   DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Toggle_trig;                DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Up_trig;                    DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Down_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Left_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Right_trig;                 DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Menu_Enter_trig;                 DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Tally_On_trig;                   DIGITAL_OUTPUT Is_Tally_On_fb;
+DIGITAL_INPUT  Tally_Off_trig;                  DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Auto Framing --------------------
+DIGITAL_INPUT  Start_Auto_Framing_trig;         DIGITAL_OUTPUT Auto_Framing_Is_On_fb;
+DIGITAL_INPUT  Stop_Auto_Framing_trig;          DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  Query_Auto_Framing_trig;         DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  _SKIP_;                          DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- C2N-CAMIDJ Interface --------------------
+DIGITAL_INPUT  C2N_CAMIDJ_Focus_Button_trig;      DIGITAL_OUTPUT C2N_CAMIDJ_Focus_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Zoom_Button_trig;       DIGITAL_OUTPUT C2N_CAMIDJ_Zoom_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Pan_Button_trig;        DIGITAL_OUTPUT C2N_CAMIDJ_Pan_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Tilt_Button_trig;       DIGITAL_OUTPUT C2N_CAMIDJ_Tilt_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Iris_Auto_Button_trig;  DIGITAL_OUTPUT C2N_CAMIDJ_Iris_Auto_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Iris_Manual_Button_trig;DIGITAL_OUTPUT C2N_CAMIDJ_Iris_Manual_Button_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Speed_Fast_trig;        DIGITAL_OUTPUT C2N_CAMIDJ_Speed_Fast_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Speed_Slow_trig;        DIGITAL_OUTPUT C2N_CAMIDJ_Speed_Slow_Is_Active_fb;
+DIGITAL_INPUT  C2N_CAMIDJ_Wheel_Clockwise_trig;   DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  C2N_CAMIDJ_Wheel_Counter_Clockwise_trig; DIGITAL_OUTPUT _SKIP_;
+DIGITAL_INPUT  C2N_CAMIDJ_Wheel_Stopped_trig;     DIGITAL_OUTPUT _SKIP_;
+
+//-------------------- Analog Inputs / Outputs --------------------
+ANALOG_INPUT   Preset_Number_ain;				ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   Pan_Speed_ain;                   ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   Tilt_Speed_ain;                  ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   Zoom_Speed_ain;                  ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   Focus_Speed_ain;                 ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   Absolute_Pan_Position_ain;       ANALOG_OUTPUT  Pan_Position_fb;
+ANALOG_INPUT   Absolute_Tilt_Position_ain;      ANALOG_OUTPUT  Tilt_Position_fb;
+ANALOG_INPUT   Set_Zoom_Position_ain;           ANALOG_OUTPUT  Zoom_Position_fb;
+ANALOG_INPUT   Set_Focus_Position_ain;			ANALOG_OUTPUT  Focus_Position_fb;
+ANALOG_INPUT   Noise_Reduction_Level;			ANALOG_OUTPUT  Noise_Reduction_Level_fb;
+ANALOG_INPUT   Set_Iris_Level_ain;              ANALOG_OUTPUT  Iris_Level_fb;
+ANALOG_INPUT   Set_Gain_Level_ain;              ANALOG_OUTPUT  Gain_Level_fb;
+ANALOG_INPUT   Set_Shutter_Level_ain;           ANALOG_OUTPUT  Shutter_Level_fb;
+               
+ANALOG_INPUT   Set_Red_Gain_Level_ain;          ANALOG_OUTPUT  Red_Gain_fb;
+ANALOG_INPUT   Set_Blue_Gain_Level_ain;         ANALOG_OUTPUT  Blue_Gain_fb;
+ANALOG_INPUT   Set_Aperture_Level_ain;          ANALOG_OUTPUT  Aperture_Level_fb;
+ANALOG_INPUT   Set_Exposure_Comp_Level_ain;     ANALOG_OUTPUT  Exposure_Comp_Level_fb;
+ANALOG_INPUT   Set_AE_Speed_ain;                ANALOG_OUTPUT  AE_Speed_fb;
+ANALOG_INPUT   Set_WB_Offset_ain;               ANALOG_OUTPUT  WB_Offset_fb;
+ANALOG_INPUT   _SKIP_;                          ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   C2N_CAMIDJ_Pan_ain;              ANALOG_OUTPUT  C2N_CAMIDJ_Display_aout;
+ANALOG_INPUT   C2N_CAMIDJ_Tilt_ain;             ANALOG_OUTPUT  C2N_CAMIDJ_Display_Mode_aout;
+ANALOG_INPUT   C2N_CAMIDJ_Zoom_ain;             ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   C2N_CAMIDJ_Speed_Adjust_ain;     ANALOG_OUTPUT  _SKIP_;
+
+//-------------------- Serial Inputs / Outputs --------------------
+STRING_INPUT   _SKIP_;                          STRING_OUTPUT  Model_Name_fb$;
+STRING_INPUT   _SKIP_;                          STRING_OUTPUT  Debug_fb$;
+BUFFER_INPUT   From_Camera_rx$[MAX_BUFFER_SIZE]; STRING_OUTPUT  To_Camera_tx$;
+
+//================================================================================
+// PARAMETERS
+//================================================================================
+
+//NONE
+
+//================================================================================
+// GLOBAL VARIABLES
+//================================================================================
+INTEGER g_nSequenceNumber;
+INTEGER g_bInitialized;
+INTEGER g_bWaitingForResponse;
+STRING g_sLastQuery[MAX_BUFFER_SIZE];
+INTEGER g_nCurrentPreset;
+INTEGER g_nQueryStep;
+INTEGER g_bAwaitingResync;
+INTEGER g_bIsTallyActive;
+INTEGER g_nInitializationState;
+INTEGER g_bWaitingForPingResponse;
+INTEGER g_nPingFailCount;
+INTEGER g_bInitInProgress;
+INTEGER g_nMissedPolls;
+INTEGER g_bIsPolling;
+INTEGER g_bQueryAEAfterPreset;
+
+// C2N-CAMIDJ State
+Nonvolatile INTEGER g_bFirstRun;
+Nonvolatile INTEGER g_nCAMIDJ_Mode;
+Nonvolatile INTEGER g_nCAMIDJ_SpeedMode;
+Nonvolatile INTEGER g_nPanSpeed_Slow, g_nPanSpeed_Fast;
+Nonvolatile INTEGER g_nTiltSpeed_Slow, g_nTiltSpeed_Fast;
+Nonvolatile INTEGER g_nZoomSpeed_Slow, g_nZoomSpeed_Fast;
+INTEGER g_bJoystickIsActive;
+INTEGER g_bWheelIsMoving;
+INTEGER g_bIsProcessingSpeedAdjust;
+INTEGER g_nLastZoomSpeed;
+INTEGER g_nLastZoomDir;
+INTEGER g_nLastPanSpeed;
+INTEGER g_nLastPanDir;
+INTEGER g_nLastTiltSpeed;
+INTEGER g_nLastTiltDir;
+INTEGER g_nPanPosition, g_nTiltPosition, g_nZoomPosition;
+SIGNED_LONG_INTEGER g_lLastActivityTimestamp;
+SIGNED_LONG_INTEGER g_lMaxSignedLongInt;                
+
+//================================================================================
+// HELPER FUNCTIONS
+//================================================================================
+   
+// Converts a raw string of bytes into a readable hex string for debugging.
+// This prevents the debugger from misinterpreting non-printable characters and ensures
+// leading zeros are shown for clarity.
+STRING_FUNCTION FormatStringAsHex(STRING sIn)
+{
+    INTEGER i;
+    STRING sOut[MAX_BUFFER_SIZE];
+    STRING sTemp[4];
+
+    sOut = "";
+    FOR (i = 1 TO LEN(sIn))
+    {
+        // For each byte in the input string, format it as a two-digit
+        // uppercase hex value with a trailing space.
+        MAKESTRING(sTemp, "%02X ", BYTE(sIn, i));
+        sOut = sOut + sTemp;
+    }
+    RETURN(sOut);
+}
+
+// Wraps a VISCA payload with the VISCA over IP header and sends it via UDP
+FUNCTION SendViscaPacket(STRING sViscaPayload, INTEGER nPayloadType)
+{
+    STRING sFullPacket[MAX_BUFFER_SIZE];
+    STRING sSequence[4];
+    STRING sPayloadLen[2];
+    STRING sTempDebugMsg[255];
+    INTEGER nPayloadLength;
+    SIGNED_LONG_INTEGER lNewSequenceNumber;
+
+    nPayloadLength = LEN(sViscaPayload);
+    
+    // Atomically increment and store the new sequence number
+    lNewSequenceNumber = g_nSequenceNumber + 1;
+    g_nSequenceNumber = lNewSequenceNumber;
+
+    MAKESTRING(sTempDebugMsg, "DEBUG: Sequence number set to %ld.", lNewSequenceNumber);
+    Debug_fb$ = sTempDebugMsg;
+
+    sPayloadLen = CHR(nPayloadLength / 256) + CHR(nPayloadLength MOD 256);
+
+    // Build the sequence string from the new local variable
+    sSequence = CHR(lNewSequenceNumber / 16777216) + CHR((lNewSequenceNumber / 65536) MOD 256) + CHR((lNewSequenceNumber / 256) MOD 256) + CHR(lNewSequenceNumber MOD 256);
+
+    sFullPacket = CHR(nPayloadType / 256) + CHR(nPayloadType MOD 256) + sPayloadLen + sSequence + sViscaPayload;
+    
+    To_Camera_tx$ = sFullPacket;
+    MAKESTRING(sTempDebugMsg, "UDP TX (Seq=%ld): %s", lNewSequenceNumber, FormatStringAsHex(sFullPacket));
+    Debug_fb$ = sTempDebugMsg;
+}
+
+// Builds a standard VISCA command and sends it
+FUNCTION SendCommand(STRING sCommandBytes)
+{
+    STRING sPayload[MAX_COMMAND_SIZE];
+    // GUARD CLAUSE REMOVED: The guard clause `IF (g_bInitialized = 0)` prevented
+    // commands from being sent during the initialization sequence. Removing it
+    // improves robustness and aligns with the working backup code.
+
+    // VISCA Command format: 81 (for camera 1) + payload + FF
+    sPayload = "\x81" + sCommandBytes + VISCA_TERMINATOR; // [11028]
+    CALL SendViscaPacket(sPayload, 0x0100);
+}
+
+// Builds a VISCA inquiry and sends it
+FUNCTION SendInquiry(STRING sInquiryBytes)
+{
+    STRING sPayload[MAX_COMMAND_SIZE];
+    IF (g_bInitialized = 0) { RETURN; } // GUARD CLAUSE: Do not send if not initialized
+
+    // VISCA Inquiry format: 81 (for camera 1) + payload + FF
+    sPayload = "\x81" + sInquiryBytes + VISCA_TERMINATOR;
+    CALL SendViscaPacket(sPayload, 0x0110);
+}
+
+// This function is now self-contained to correctly reset the sequence number
+// on both the camera and within our module.
+FUNCTION SendSequenceReset()
+{
+    STRING sTempDebugMsg[100];
+    // **CRITICAL FIX**: Assign the string literal directly to the STRING_OUTPUT.
+    To_Camera_tx$ = "\x02\x00\x00\x01\x00\x00\x00\x00\x01";
+    
+    // Reset our module's sequence number to match the camera's reset state.
+    g_nSequenceNumber = 0;
+    MAKESTRING(sTempDebugMsg, "DEBUG: Sequence number RESET to %d by SendSequenceReset().", g_nSequenceNumber);
+    Debug_fb$ = sTempDebugMsg;
+}
+
+// This function clears the query tracking flags.
+// It is called when a response is received or a timeout occurs.
+FUNCTION ClearPendingQueries()
+{
+    g_bWaitingForResponse = 0;
+    g_sLastQuery = "";
+}
+   
+// This function sends a query and sets up a timeout for the response.
+FUNCTION StartQuery(STRING sQueryPayload)
+{
+    STRING sFullQueryPayload[MAX_COMMAND_SIZE];
+    IF (g_bAwaitingResync = 1) { RETURN; }
+    IF (g_bWaitingForResponse = 1)
+    {
+        Debug_fb$ = "Query ignored, waiting for: " + FormatStringAsHex(g_sLastQuery);
+        RETURN;
+    }
+
+    g_sLastQuery = sQueryPayload;
+    g_bWaitingForResponse = 1;
+
+    sFullQueryPayload = "\x09" + sQueryPayload;
+    CALL SendInquiry(sFullQueryPayload);
+
+    WAIT(RESPONSE_TIMEOUT_HS, Response_Timeout_Handler)
+    {
+        IF (g_bWaitingForResponse = 1)
+        {
+            Debug_fb$ = "Timeout waiting for: " + FormatStringAsHex(g_sLastQuery);
+            CALL ClearPendingQueries();
+        }
+    }
+}
+
+// New function to manage the query sequence
+FUNCTION SendNextQuery()
+{
+    g_nQueryStep = g_nQueryStep + 1;
+    SWITCH (g_nQueryStep)
+    {
+        CASE (1): { CALL StartQuery("\x04\x00"); } // Power Status
+        CASE (2): { CALL StartQuery("\x06\x12"); } // Pan/Tilt Position
+        CASE (3): { CALL StartQuery("\x04\x47"); } // Zoom Position
+        CASE (4): { CALL StartQuery("\x04\x48"); } // Focus Position
+        CASE (5): { CALL StartQuery("\x04\x38"); } // Auto Focus Status
+        CASE (6): { CALL StartQuery("\x04\x39"); } // AE Mode (Now includes Priority modes)
+        CASE (7): { CALL StartQuery("\x04\x4B"); } // Iris Level
+        CASE (8): { CALL StartQuery("\x04\x4C"); } // Gain Level
+        CASE (9): { CALL StartQuery("\x04\x43"); } // Red Gain
+        CASE (10): { CALL StartQuery("\x04\x44"); } // Blue Gain
+        CASE (11): { CALL StartQuery("\x04\x4A"); } // Shutter Level
+        CASE (12): { CALL StartQuery("\x04\x42"); } // Detail Level
+        CASE (13): { CALL StartQuery("\x04\x33"); } // Backlight Status
+        CASE (14): { CALL StartQuery("\x04\x3D"); } // WDR (Visibility Enhancer)
+        CASE (15): { CALL StartQuery("\x04\x35"); } // White Balance Mode
+        CASE (16): { CALL StartQuery("\x00\x02"); } // Model Name (CAM_Versioning)
+        CASE (17): { CALL StartQuery("\x04\x53"); } // Noise Reduction Level
+        CASE (18): { CALL StartQuery("\x7E\x01\x0A"); } // Tally Status
+        CASE (19): { CALL StartQuery("\x7E\x04\x3A"); } // Auto Framing Status
+        CASE (20): { CALL StartQuery("\x04\x5E"); } // High Sensitivity Status
+        CASE (21): { CALL StartQuery("\x04\x3E"); } // Exposure Comp Status
+        CASE (22): { CALL StartQuery("\x04\x4E"); } // Exposure Comp Level
+        CASE (23): { CALL StartQuery("\x04\x5D"); } // AE Speed
+        CASE (24): { CALL StartQuery("\x7E\x01\x2E"); } // WB Offset
+        CASE (25): { CALL StartQuery("\x04\x34"); } // Image Stabilizer Status
+        CASE (26): { CALL StartQuery("\x04\x32"); } // Flicker Cancel Status
+        CASE (27): { CALL StartQuery("\x04\x63"); } // Picture Effect Status
+        CASE (28): { CALL StartQuery("\x04\x37"); } // Defog Status
+        CASE (29): { g_nQueryStep = 0; }           // End of sequence
+    }
+}
+
+// This function now just resets and starts the query chain.
+FUNCTION QueryAllStatus()
+{
+	Debug_fb$ = "QueryAllStatus() Called";
+    g_nQueryStep = 0;
+    CALL SendNextQuery();
+}
+
+// Clears all preset feedback LEDs and resets the current preset tracker.
+FUNCTION ClearAllPresetFeedback()
+{
+    g_nCurrentPreset = -1; // Set to invalid preset
+
+    Preset_1_Active_fb = 0;
+    Preset_2_Active_fb = 0;
+    Preset_3_Active_fb = 0;
+    Preset_4_Active_fb = 0;
+    Preset_5_Active_fb = 0;
+    Preset_6_Active_fb = 0;
+    Preset_7_Active_fb = 0;
+    Preset_8_Active_fb = 0;
+}
+
+FUNCTION SendVersionInquiry()
+{
+    // As a diagnostic step, we are sending a CAM_VersionInq instead of IF_Clear.
+    // If this succeeds, it proves the camera is ready for commands but dislikes IF_Clear.
+    // VISCA Command: CAM_VersionInq (8x 09 00 02 FF)
+    // The payload passed to SendInquiry is \x09 (inquiry) + \x00\x02 (CAM_VersionInq)
+    SendInquiry("\x09\x00\x02");
+    Debug_fb$ = "DEBUG: Sent CAM_VersionInq instead of IF_Clear.";
+}
+
+FUNCTION UpdatePresetFeedback(INTEGER nPreset)
+{
+    CALL ClearAllPresetFeedback();
+    g_nCurrentPreset = nPreset; // Set the new current preset
+    SWITCH (nPreset)
+    {
+        CASE (1):  { Preset_1_Active_fb = 1; }
+        CASE (2):  { Preset_2_Active_fb = 1; }
+        CASE (3):  { Preset_3_Active_fb = 1; }
+        CASE (4):  { Preset_4_Active_fb = 1; }
+        CASE (5):  { Preset_5_Active_fb = 1; }
+        CASE (6):  { Preset_6_Active_fb = 1; }
+        CASE (7):  { Preset_7_Active_fb = 1; }
+        CASE (8):  { Preset_8_Active_fb = 1; }
+    }
+}
+
+FUNCTION ScheduleTallyKeepAlive()
+{
+    // This WAIT block will now be called recursively
+    WAIT(1000, Tally_Keep_Alive)
+    {
+        IF (g_bIsTallyActive = 1)
+        {
+            Debug_fb$ = "Tally Keep-Alive Sent";
+            Print("Tally_Keep_Alive: Sending keep-alive command.\n");
+            SendCommand("\x01\x7E\x01\x0A\x00\x02");
+            
+            // Re-schedule the next keep-alive by calling the parent function
+            CALL ScheduleTallyKeepAlive();
+        }
+    }
+}
+
+FUNCTION HandleManualMovementOverrides()
+{
+    // Stop auto framing, as any manual movement should override it.
+    SendCommand("\x01\x7E\x04\x3A\x00");
+    Auto_Framing_Is_On_fb = 0; // Provide immediate feedback
+
+    // Clear any active preset, as the camera is no longer at that position.
+    CALL ClearAllPresetFeedback();
+}
+
+FUNCTION SendPresetRecall(INTEGER nPreset)
+{
+    STRING sCmd[50];
+    IF (nPreset > 0)
+    {
+        // First, command auto framing to stop
+        SendCommand("\x01\x7E\x04\x3A\x00");
+        Auto_Framing_Is_On_fb = 0; // Immediate feedback
+        Debug_fb$ = "CMD: Stopping Auto Framing for Preset Recall";
+
+        // Update the feedback LEDs immediately
+        UpdatePresetFeedback(nPreset);
+
+        // Wait a short moment before recalling the preset
+        DELAY(20);
+        MAKESTRING(sCmd, "\x01\x04\x3F\x02%s", CHR(nPreset - 1));
+        CALL SendCommand(sCmd);
+        Debug_fb$ = "CMD: Recalling Preset " + ITOA(nPreset);
+
+        // MODIFIED: Set a flag to query the AE status after the recall is complete,
+        // rather than sending the query on a fixed timer.
+        g_bQueryAEAfterPreset = 1;
+    }
+}
+
+FUNCTION SendPresetCommand(INTEGER nAction, INTEGER nPreset)
+{
+    STRING sCmd[50];
+    IF (nPreset >= 0 && nPreset <= 255) // Valid preset range
+    {
+        // Action: 0=Reset, 1=Set, 2=Recall
+        MAKESTRING(sCmd, "\x01\x04\x3F%s%s", CHR(nAction), CHR(nPreset));
+        CALL SendCommand(sCmd);
+    }
+}
+
+// --- Feedback Processing Functions ---
+// Manages all feedback LEDs and display for the C2N-CAMIDJ
+FUNCTION UpdateCAMIDJFeedback()
+{
+    INTEGER nDisplayValue;
+    nDisplayValue = 0;
+
+    // --- Set Mode Feedback LEDs (Timeout Aware) ---
+    C2N_CAMIDJ_Focus_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_FOCUS); 
+    C2N_CAMIDJ_Zoom_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_ZOOM_SPEED);
+    C2N_CAMIDJ_Pan_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_PAN_SPEED);
+    C2N_CAMIDJ_Tilt_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_TILT_SPEED); 
+    // --- Iris Feedback ---
+    C2N_CAMIDJ_Iris_Auto_Button_Is_Active_fb = Is_AE_Mode_Auto_fb;
+    C2N_CAMIDJ_Iris_Manual_Button_Is_Active_fb = !Is_AE_Mode_Auto_fb; 
+
+    // --- MODIFIED: Speed Mode LED Feedback is now ALWAYS active ---
+    // This ensures the speed LEDs are always lit based on the current speed mode,
+    // regardless of the active adjustment mode (Pan, Tilt, Zoom, Focus, etc.).
+    Print("UpdateCAMIDJFeedback: Setting Speed LEDs. SpeedMode=%d\n", g_nCAMIDJ_SpeedMode);
+    C2N_CAMIDJ_Speed_Fast_Is_Active_fb = (g_nCAMIDJ_SpeedMode = SPEED_FAST);
+    C2N_CAMIDJ_Speed_Slow_Is_Active_fb = (g_nCAMIDJ_SpeedMode = SPEED_SLOW);
+
+    // --- Set Display Mode and Value ---
+    SWITCH (g_nCAMIDJ_Mode)
+    {
+        CASE (MODE_DEFAULT):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 0; 
+        }
+        CASE (MODE_AE_AUTO):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 0; 
+        }
+        CASE (MODE_FOCUS):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 8; 
+        }
+        CASE (MODE_IRIS):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 9; 
+        }
+        CASE (MODE_ZOOM_SPEED):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 4; 
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nZoomSpeed_Fast, 65535, 7); }
+            ELSE { nDisplayValue = MulDiv(g_nZoomSpeed_Slow, 65535, 7); }
+            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+        }
+        CASE (MODE_PAN_SPEED):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 4; 
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nPanSpeed_Fast - 1, 65535, 23); }
+            ELSE { nDisplayValue = MulDiv(g_nPanSpeed_Slow - 1, 65535, 23); }
+            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+        }
+        CASE (MODE_TILT_SPEED):
+        {
+            C2N_CAMIDJ_Display_Mode_aout = 4; 
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nTiltSpeed_Fast - 1, 65535, 22); }
+            ELSE { nDisplayValue = MulDiv(g_nTiltSpeed_Slow - 1, 65535, 22); }
+            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+        }
+    }
+}
+
+// Updates the timestamp for the last user activity.
+FUNCTION UpdateActivityTimestamp()
+{
+    g_lLastActivityTimestamp = GetHSeconds();
+    Debug_fb$ = "CAMIDJ: Activity Timestamp Updated.";
+    Print("CAMIDJ Activity Timestamp Updated to %ld\n", g_lLastActivityTimestamp);
+}
+
+// A recurring check to see if the mode should time out.
+FUNCTION StartModeTimeoutChecker()
+{
+    WAIT(MODE_CHECK_INTERVAL, Mode_Timeout_Checker)
+    {
+        SIGNED_LONG_INTEGER nNow, nElapsed;
+        
+        // MODIFIED: Simplified the condition. Now, any mode other than the default
+        // will be checked for inactivity and will time out after 30 seconds.
+        IF (g_nCAMIDJ_Mode != MODE_DEFAULT)
+        {
+            nNow = GetHSeconds();
+            nElapsed = nNow - g_lLastActivityTimestamp;
+
+            // Handle the unlikely event that the GetHSeconds() timer wraps around
+            IF (nNow < g_lLastActivityTimestamp)
+            {
+                // CORRECTED LINE: Use the global variable to ensure 32-bit math
+                nElapsed = (g_lMaxSignedLongInt - g_lLastActivityTimestamp) + nNow;
+            }
+
+            IF (nElapsed >= MODE_TIMEOUT_S)
+            {
+                // Timeout has occurred. Revert to default mode.
+                Debug_fb$ = "CAMIDJ: Mode timed out. Reverting to default.";
+                Print("CAMIDJ Mode Timed Out. Reverting.\n");
+                g_nCAMIDJ_Mode = MODE_DEFAULT;
+                CALL UpdateCAMIDJFeedback();
+            }
+        }
+        
+        // Reschedule this function to run again.
+        CALL StartModeTimeoutChecker();
+    }
+}
+
+FUNCTION StartInitAttempt()
+{
+    // If we have already initialized OR an init is in progress, do nothing.
+    IF (g_bInitialized = 1 || g_bInitInProgress = 1)
+    {
+        RETURN;
+    }
+    
+    g_bInitInProgress = 1;
+    Debug_fb$ = "StartInitAttempt: BEGIN.";
+    // Set the initial state and send the first command. The RX handler will advance the state.
+    g_nInitializationState = INIT_STATE_WAIT_RESET_ACK;
+    SendSequenceReset();
+    
+    // Start a master timeout for the entire initialization attempt
+    WAIT(1500, Master_Init_Timeout)
+    {
+        IF (g_bInitInProgress = 1)
+        {
+            g_bInitInProgress = 0; // Clear flag to allow a new attempt
+            Debug_fb$ = "ERROR: Full Init attempt timed out. Retrying...";
+            CALL StartInitAttempt();
+        }
+    }
+}
+
+FUNCTION KeepAliveLoop()
+{
+    // This function creates a recurring timer to check the camera's connection status.
+    WAIT(1500, Keep_Alive_Timer) // Poll every 15 seconds
+    {
+        // Only perform the poll if the module has been successfully initialized.
+        IF (g_bInitialized = 1)
+        {
+            g_bIsPolling = 1;
+            Debug_fb$ = "Keep-Alive: Sending Auto Framing Status query.";
+            StartQuery("\x7E\x04\x3A"); 
+
+            WAIT(500, Ping_Timeout)
+            {
+                IF(g_bIsPolling = 1) 
+                {
+                    g_nMissedPolls = g_nMissedPolls + 1;
+                    Debug_fb$ = "Keep-Alive Timeout: No response. Missed polls: " + ITOA(g_nMissedPolls);
+                    IF(g_nMissedPolls >= 2)
+                    {
+                        Debug_fb$ = "Offline: Too many missed polls. Re-initializing.";
+                        g_bInitialized = 0; 
+						g_bIsPolling = 0;
+                        CALL ClearPendingQueries();
+                        Is_On_fb = 0;
+                        Is_Off_fb = 0;
+                        Is_Standby_fb = 0;
+                        CALL ClearAllPresetFeedback();
+                        // Trigger a new initialization attempt.
+                        CALL StartInitAttempt();
+                    }
+                }
+            }
+        }
+        
+        // Always reschedule the next keep-alive check.
+        CALL KeepAliveLoop();
+    }
+}
+
+FUNCTION ProcessPowerFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { Is_On_fb = 1; Is_Off_fb = 0; }
+    ELSE IF (BYTE(data, 3) = 3) { Is_On_fb = 0; Is_Off_fb = 1; }
+    Debug_fb$ = "RX: Parsed Power Feedback";
+}
+
+FUNCTION ProcessMuteFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { Video_Is_Muted_fb = 1; }
+    ELSE { Video_Is_Muted_fb = 0; }
+    Debug_fb$ = "RX: Parsed Mute Feedback";
+}
+
+FUNCTION ProcessAutoFocusFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { Is_Auto_Focus_On_fb = 1; }
+    ELSE { Is_Auto_Focus_On_fb = 0; }
+    Debug_fb$ = "RX: Parsed Auto Focus Feedback";
+}
+
+FUNCTION ProcessAEFeedback(STRING data)
+{
+    INTEGER nMode;
+    nMode = BYTE(data, 3);
+    Is_AE_Mode_Auto_fb = (nMode = 0);
+    Is_AE_Mode_Manual_fb = (nMode = 3);
+    Is_AE_Mode_Shutter_Priority_fb = (nMode = 0x0A);
+    Is_AE_Mode_Iris_Priority_fb = (nMode = 0x0B);
+    CALL UpdateCAMIDJFeedback();
+    Debug_fb$ = "RX: Parsed AE Mode Feedback";
+}
+
+FUNCTION ProcessBacklightFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { Backlight_Is_On_fb = 1; }
+    ELSE { Backlight_Is_On_fb = 0; }
+    Debug_fb$ = "RX: Parsed Backlight Feedback";
+}
+
+FUNCTION ProcessWDRFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { WDR_Is_On_fb = 1; }
+    ELSE { WDR_Is_On_fb = 0; }
+    Debug_fb$ = "RX: Parsed WDR Feedback";
+}
+
+FUNCTION ProcessHighSenseFeedback(STRING data)
+{
+    IF (BYTE(data, 3) = 2) { Is_High_Sensitivity_On_fb = 1; }
+    ELSE { Is_High_Sensitivity_On_fb = 0; }
+    Debug_fb$ = "RX: Parsed High Sensitivity Feedback";
+}
+
+FUNCTION ProcessPTPosFeedback(STRING data)
+{
+    Pan_Position_fb = (BYTE(data, 4) * 4096) + (BYTE(data, 5) * 256) + (BYTE(data, 6) * 16) + BYTE(data, 7);
+    Tilt_Position_fb = (BYTE(data, 8) * 4096) + (BYTE(data, 9) * 256) + (BYTE(data, 10) * 16) + BYTE(data, 11);
+    Debug_fb$ = "RX: Parsed Pan/Tilt Position";
+}
+
+FUNCTION ProcessZoomPosFeedback(STRING data)
+{
+    Zoom_Position_fb = (BYTE(data, 4) * 4096) + (BYTE(data, 5) * 256) + (BYTE(data, 6) * 16) + BYTE(data, 7);
+    Debug_fb$ = "RX: Parsed Zoom Position";
+}
+
+FUNCTION ProcessFocusPosFeedback(STRING data)
+{
+    Focus_Position_fb = (BYTE(data, 4) * 4096) + (BYTE(data, 5) * 256) + (BYTE(data, 6) * 16) + BYTE(data, 7);
+    Debug_fb$ = "RX: Parsed Focus Position";
+}
+
+FUNCTION ProcessIrisFeedback(STRING data)
+{
+    Iris_Level_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    CALL UpdateCAMIDJFeedback();
+    Debug_fb$ = "RX: Parsed Iris Level";
+}
+
+FUNCTION ProcessGainFeedback(STRING data)
+{
+    Gain_Level_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Gain Level";
+}
+
+FUNCTION ProcessNoiseReductionFeedback(STRING data)
+{
+    Noise_Reduction_Level_fb = BYTE(data, 3);
+    Debug_fb$ = "RX: Parsed Noise Reduction Feedback";
+}
+
+FUNCTION ProcessWBModeFeedback(STRING data)
+{
+    INTEGER nMode;
+    nMode = BYTE(data, 3);
+    Is_WB_Mode_Auto_fb = (nMode = 0);
+    Is_WB_Mode_Indoor_fb = (nMode = 1);
+    Is_WB_Mode_Outdoor_fb = (nMode = 2);
+    Is_WB_Mode_One_Push_fb = (nMode = 3);
+    Is_WB_Mode_Manual_fb = (nMode = 5);
+    Debug_fb$ = "RX: Parsed White Balance Mode";
+}
+
+FUNCTION ProcessModelNameFeedback(STRING data)
+{
+    INTEGER modelByte1, modelByte2;
+    // Model ID is in the 5th and 6th bytes of the VISCA payload (90 50 [GG GG] [HH HH]...)
+    // which corresponds to the 3rd and 4th bytes of the data string passed to this function.
+    modelByte1 = BYTE(data, 3);
+    modelByte2 = BYTE(data, 4);
+
+    IF (modelByte1 = 0x06 && modelByte2 = 0x21) 
+    { 
+        Model_Name_fb$ = "Sony SRG-A40"; 
+    }
+    ELSE IF (modelByte1 = 0x06 && modelByte2 = 0x22) 
+    { 
+        Model_Name_fb$ = "Sony SRG-A12"; 
+    }
+    ELSE 
+    { 
+        Model_Name_fb$ = "Unknown Model"; 
+    }
+    Debug_fb$ = "RX: Parsed Model Name";
+}
+
+FUNCTION ProcessTallyFeedback(STRING data)
+{
+    // Response is y0 50 0p FF, where p=2 is ON and p=3 is OFF
+    IF (BYTE(data, 3) = 2)
+    {
+        Is_Tally_On_fb = 1;
+    }
+    ELSE
+    {
+        Is_Tally_On_fb = 0;
+    }
+    Debug_fb$ = "RX: Parsed Tally Feedback";
+}
+
+// Processes the response to the Auto Framing inquiry
+FUNCTION ProcessAutoFramingFeedback(STRING data)
+{
+    // Response is y0 50 0p FF, where p=1 is On
+    IF (BYTE(data, 3) = 1)
+    {
+        Auto_Framing_Is_On_fb = 1;
+    }
+    ELSE
+    {
+        Auto_Framing_Is_On_fb = 0;
+    }
+    Debug_fb$ = "RX: Parsed Auto Framing Feedback";
+}
+
+// Processes the response to the Red Gain inquiry
+FUNCTION ProcessRGainFeedback(STRING data)
+{
+    // Response format is y0 50 00 00 0p 0p FF
+    Red_Gain_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Red Gain";
+}
+
+// Processes the response to the Blue Gain inquiry
+FUNCTION ProcessBGainFeedback(STRING data)
+{
+    // Response format is y0 50 00 00 0p 0p FF
+    Blue_Gain_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Blue Gain";
+}
+
+// Processes the response to the Shutter Level inquiry
+FUNCTION ProcessShutterFeedback(STRING data)
+{
+    // Response format is y0 50 00 00 0p 0p FF
+    Shutter_Level_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Shutter Level";
+}
+
+// Processes the response to the Detail/Aperture inquiry
+FUNCTION ProcessApertureFeedback(STRING data)
+{
+    // Response format is y0 50 00 00 0p 0p FF
+    Aperture_Level_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Detail/Aperture Level";
+}
+FUNCTION ProcessExposureCompStatusFeedback(STRING data)
+{
+    Is_Exposure_Comp_On_fb = (BYTE(data, 3) = 2);
+    Debug_fb$ = "RX: Parsed Exp Comp Status";
+}
+
+FUNCTION ProcessExposureCompLevelFeedback(STRING data)
+{
+    Exposure_Comp_Level_fb = (BYTE(data, 5) * 16) + BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed Exp Comp Level";
+}
+
+FUNCTION ProcessAESpeedFeedback(STRING data)
+{
+    AE_Speed_fb = BYTE(data, 3);
+    Debug_fb$ = "RX: Parsed AE Speed";
+}
+
+FUNCTION ProcessWBOffsetFeedback(STRING data)
+{
+    WB_Offset_fb = BYTE(data, 6);
+    Debug_fb$ = "RX: Parsed WB Offset";
+}
+
+FUNCTION ProcessImageStabilizerFeedback(STRING data)
+{
+    Is_Image_Stabilizer_On_fb = (BYTE(data, 3) = 2);
+    Debug_fb$ = "RX: Parsed Image Stabilizer Status";
+}
+
+FUNCTION ProcessFlickerCancelFeedback(STRING data)
+{
+    Is_Flicker_Cancel_On_fb = (BYTE(data, 3) = 2);
+    Debug_fb$ = "RX: Parsed Flicker Cancel Status";
+}
+
+FUNCTION ProcessPictureEffectFeedback(STRING data)
+{
+    Is_Picture_Effect_BW_On_fb = (BYTE(data, 3) = 4);
+    Debug_fb$ = "RX: Parsed Picture Effect Status";
+}
+
+FUNCTION ProcessDefogFeedback(STRING data)
+{
+    Is_Defog_On_fb = (BYTE(data, 3) = 2);
+    Debug_fb$ = "RX: Parsed Defog Status";
+}
+
+// Master response parser - routes responses to the correct processing function.
+FUNCTION ParseResponse(STRING sResponse)
+{
+    INTEGER nResponseType;
+    // Any valid response from the camera means it is online.
+    // Reset the missed polls counter.
+    g_nMissedPolls = 0;
+    Debug_fb$ = "RX: Parsing Response: " + FormatStringAsHex(sResponse);
+    nResponseType = BYTE(sResponse, 2) & 0xF0;
+
+    IF (nResponseType = 0x40) // ACK
+    {
+        Debug_fb$ = "RX: Command ACK " + FormatStringAsHex(sResponse);
+    }
+    ELSE IF (nResponseType = 0x50) // Data or Completion
+    {
+        // MODIFIED: Handle the completion message for our post-preset query
+        IF (BYTE(sResponse, 2) = 0x51)
+        {
+            Debug_fb$ = "RX: Command Complete " + FormatStringAsHex(sResponse);
+            
+            // Check if we need to send an AE query after a preset recall
+            IF (g_bQueryAEAfterPreset = 1)
+            {
+                g_bQueryAEAfterPreset = 0; // Clear the flag
+                Debug_fb$ = "Preset recall complete. Now querying AE status.";
+                // Use a short WAIT to ensure the camera is ready after completion.
+                WAIT(20, PostPresetQuery) // 200ms delay
+                {
+                     StartQuery("\x04\x39"); // Query AE Mode
+                }
+            }
+            RETURN;
+        }
+
+        // Check if this response is for our keep-alive poll.
+        IF (g_bIsPolling = 1 && g_sLastQuery = "\x7E\x04\x3A")
+        {
+            g_bIsPolling = 0; // Clear the flag, as we've handled the poll.
+            Debug_fb$ = "RX: Poll response received. Processing Auto Framing Feedback only.";
+            CALL ProcessAutoFramingFeedback(sResponse);
+            CALL ClearPendingQueries();
+            // We intentionally DO NOT call SendNextQuery() here.
+        }
+        ELSE IF (g_bWaitingForResponse = 1)
+        {
+            // This is a normal response from the main query chain or a single query.
+            g_bIsPolling = 0; // Ensure polling flag is clear
+
+            IF (g_sLastQuery = "\x04\x00") { Debug_fb$ = "RX: Power Feedback"; CALL ProcessPowerFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x06\x12") { Debug_fb$ = "RX: Pan/Tilt Position"; CALL ProcessPTPosFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x47") { Debug_fb$ = "RX: Zoom Position"; CALL ProcessZoomPosFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x48") { Debug_fb$ = "RX: Focus Position"; CALL ProcessFocusPosFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x38") { Debug_fb$ = "RX: Auto Focus Feedback"; CALL ProcessAutoFocusFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x39") { Debug_fb$ = "RX: AE Mode Feedback"; CALL ProcessAEFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x4B") { Debug_fb$ = "RX: Iris Level"; CALL ProcessIrisFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x4C") { Debug_fb$ = "RX: Gain Level"; CALL ProcessGainFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x43") { Debug_fb$ = "RX: Red Gain"; CALL ProcessRGainFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x44") { Debug_fb$ = "RX: Blue Gain"; CALL ProcessBGainFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x4A") { Debug_fb$ = "RX: Shutter Level"; CALL ProcessShutterFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x42") { Debug_fb$ = "RX: Detail Level"; CALL ProcessApertureFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x33") { Debug_fb$ = "RX: Backlight Feedback"; CALL ProcessBacklightFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x3D") { Debug_fb$ = "RX: WDR Feedback"; CALL ProcessWDRFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x35") { Debug_fb$ = "RX: WB Mode Feedback"; CALL ProcessWBModeFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x00\x02") { Debug_fb$ = "RX: Model Name"; CALL ProcessModelNameFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x53") { Debug_fb$ = "RX: Noise Reduction"; CALL ProcessNoiseReductionFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x7E\x01\x0A") { Debug_fb$ = "RX: Tally Status"; CALL ProcessTallyFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x7E\x04\x3A") { Debug_fb$ = "RX: Auto Framing Status"; CALL ProcessAutoFramingFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x5E") { Debug_fb$ = "RX: High Sensitivity"; CALL ProcessHighSenseFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x3E") { Debug_fb$ = "RX: Exp Comp Status"; CALL ProcessExposureCompStatusFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x4E") { Debug_fb$ = "RX: Exp Comp Level"; CALL ProcessExposureCompLevelFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x5D") { Debug_fb$ = "RX: AE Speed"; CALL ProcessAESpeedFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x7E\x01\x2E") { Debug_fb$ = "RX: WB Offset"; CALL ProcessWBOffsetFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x34") { Debug_fb$ = "RX: Image Stabilizer"; CALL ProcessImageStabilizerFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x32") { Debug_fb$ = "RX: Flicker Cancel"; CALL ProcessFlickerCancelFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x63") { Debug_fb$ = "RX: Picture Effect"; CALL ProcessPictureEffectFeedback(sResponse); }
+            ELSE IF (g_sLastQuery = "\x04\x37") { Debug_fb$ = "RX: Defog Status"; CALL ProcessDefogFeedback(sResponse); }
+
+            CALL ClearPendingQueries();
+
+            IF (g_nQueryStep > 0)
+            {
+                CALL SendNextQuery();
+            }
+        }
+    }
+    ELSE IF (nResponseType >= 0x60)
+    {
+        Debug_fb$ = "RX ERROR: " + FormatStringAsHex(sResponse);
+        CALL ClearPendingQueries();
+    }
+}
+
+//******************C2N-CAMIDJ Functions******************
+
+
+
+// Ramps the iris up or down at a controlled pace
+FUNCTION StartIrisRamp(INTEGER nDirection)
+{
+    STRING sCmd[10];
+    WHILE (g_bWheelIsMoving = 1)
+    {
+        sCmd = "\x01\x04\x0B" + CHR(nDirection);
+        CALL SendCommand(sCmd);
+        DELAY(5); // Corrected: Delay reduced from 500ms to 50ms for responsiveness
+	}
+}
+
+// Consolidated function for handling all joystick movement
+FUNCTION ProcessJoystickMovement()
+{
+    STRING sCmd[20];
+    INTEGER nPan, nTilt, nZoom;
+    INTEGER nSonyPanDir, nSonyTiltDir, nZoomDir;
+    INTEGER nMaxPanSpeed, nMaxTiltSpeed, nMaxZoomSpeed;
+    INTEGER nCalcPanSpeed, nCalcTiltSpeed, nCalcZoomSpeed;
+    INTEGER bIsPanCentered, bIsTiltCentered, bIsZoomCentered;
+
+    CALL HandleManualMovementOverrides();
+    CALL UpdateActivityTimestamp(); // Reset timeout on movement start
+    Debug_fb$ = "CAMIDJ: Start Joystick Movement";
+
+    WHILE (1)
+    {
+        // *** MODIFIED: Read from global variables instead of direct analog inputs ***
+        // This ensures we use the values initialized in MAIN() until they are
+        // updated by their respective CHANGE handlers, solving the startup issue.
+        nPan = g_nPanPosition;
+        nTilt = g_nTiltPosition;
+        nZoom = g_nZoomPosition;
+             
+        // Break down compound conditions into nested IFs for compiler safety.
+        IF (Abs(nPan - 32768) <= JOYSTICK_DEADBAND)
+        {
+            bIsPanCentered = 1;
+        }
+        ELSE
+        {
+            bIsPanCentered = 0;
+        }
+
+        IF (Abs(nTilt - 32768) <= JOYSTICK_DEADBAND)
+        {
+            bIsTiltCentered = 1;
+        }
+        ELSE
+        {
+            bIsTiltCentered = 0;
+        }
+
+        IF (Abs(nZoom - 32768) <= JOYSTICK_DEADBAND)
+        {
+            bIsZoomCentered = 1;
+        }
+        ELSE
+        {
+            bIsZoomCentered = 0;
+        }
+
+        // Exit loop only if all three axes are centered
+        IF (bIsPanCentered = 1)
+        {
+            IF (bIsTiltCentered = 1)
+            {
+                IF (bIsZoomCentered = 1)
+                {
+                     BREAK;
+                }
+            }
+        }
+        
+        CALL UpdateActivityTimestamp(); // Keep resetting timeout while moving
+
+        // --- Get Max Speeds ---
+        IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) {
+            nMaxPanSpeed = g_nPanSpeed_Fast;
+            nMaxTiltSpeed = g_nTiltSpeed_Fast;
+            nMaxZoomSpeed = g_nZoomSpeed_Fast;
+        } ELSE {
+            nMaxPanSpeed = g_nPanSpeed_Slow;
+            nMaxTiltSpeed = g_nTiltSpeed_Slow;
+            nMaxZoomSpeed = g_nZoomSpeed_Slow;
+        }
+
+        // --- Calculate Pan/Tilt State (Corrected for Sony VISCA) ---
+        IF (nPan > (32768 + JOYSTICK_DEADBAND)) { nSonyPanDir = 1; }      // Pan Left 
+        ELSE IF (nPan < (32768 - JOYSTICK_DEADBAND)) { nSonyPanDir = 2; } // Pan Right 
+        ELSE { nSonyPanDir = 3; }                                       // Pan Stop 
+
+        IF (nTilt < (32768 - JOYSTICK_DEADBAND)) { nSonyTiltDir = 1; }   // Tilt Up 
+        ELSE IF (nTilt > (32768 + JOYSTICK_DEADBAND)) { nSonyTiltDir = 2; } // Tilt Down 
+        ELSE { nSonyTiltDir = 3; }                                      // Tilt Stop 
+
+        // --- Calculate and Clamp Speeds ---
+        nCalcPanSpeed = MulDiv(Abs(nPan - 32768), nMaxPanSpeed, 32767);
+        IF (nCalcPanSpeed > 24) { nCalcPanSpeed = 24; } // Clamp to max pan speed 
+        
+        nCalcTiltSpeed = MulDiv(Abs(nTilt - 32768), nMaxTiltSpeed, 32767);
+        IF (nCalcTiltSpeed > 23) { nCalcTiltSpeed = 23; } // Clamp to max tilt speed 
+        
+        // --- Send Pan/Tilt Command ONLY IF State has Changed ---
+        IF (nCalcPanSpeed <> g_nLastPanSpeed || nCalcTiltSpeed <> g_nLastTiltSpeed || nSonyPanDir <> g_nLastPanDir || nSonyTiltDir <> g_nLastTiltDir)
+        {
+            sCmd = "\x01\x06\x01" + CHR(nCalcPanSpeed) + CHR(nCalcTiltSpeed) + CHR(nSonyPanDir) + CHR(nSonyTiltDir);
+            CALL SendCommand(sCmd);
+            
+            g_nLastPanSpeed = nCalcPanSpeed;
+            g_nLastTiltSpeed = nCalcTiltSpeed;
+            g_nLastPanDir = nSonyPanDir;
+            g_nLastTiltDir = nSonyTiltDir;
+        }
+
+        // --- Calculate Zoom State ---
+        nCalcZoomSpeed = MulDiv(Abs(nZoom - 32768), nMaxZoomSpeed, 32767);
+        IF (nCalcZoomSpeed > 7) { nCalcZoomSpeed = 7; } // Clamp to max zoom speed
+
+        IF (nZoom > (32768 + JOYSTICK_DEADBAND)) { nZoomDir = 2; }      // Zoom Out (Tele)
+        ELSE IF (nZoom < (32768 - JOYSTICK_DEADBAND)) { nZoomDir = 1; } // Zoom In (Wide)
+        ELSE { nZoomDir = 0; }                                         // Stop
+
+        // --- Send Zoom Command ONLY IF State has Changed ---
+        IF (nCalcZoomSpeed <> g_nLastZoomSpeed || nZoomDir <> g_nLastZoomDir)
+        {
+            IF (nZoomDir = 1) { 
+                // Zoom In
+                sCmd = "\x01\x04\x07" + CHR(0x20 + nCalcZoomSpeed);
+            } ELSE IF (nZoomDir = 2) { // Zoom Out
+                sCmd = "\x01\x04\x07" + CHR(0x30 + nCalcZoomSpeed);
+            } ELSE { // Zoom Stop
+                sCmd = "\x01\x04\x07\x00";
+            }
+            CALL SendCommand(sCmd);
+
+            g_nLastZoomSpeed = nCalcZoomSpeed;
+            g_nLastZoomDir = nZoomDir;
+        }
+
+        DELAY(5); // Poll at ~20Hz
+    }
+
+    // Send Final Stop Commands when loop is exited
+    Debug_fb$ = "CAMIDJ: Stop Joystick Movement";
+    SendCommand("\x01\x06\x01\x00\x00\x03\x03"); // Stop Pan/Tilt
+    DELAY(5);
+    SendCommand("\x01\x04\x07\x00");           // Stop Zoom
+}
+
+FUNCTION CheckJoystickMovement()
+{
+    IF (g_bJoystickIsActive = 0)
+    {
+        g_bJoystickIsActive = 1;
+        CALL ProcessJoystickMovement();
+        g_bJoystickIsActive = 0;
+    }
+}
+
+// Further helper functions for parsing responses and managing C2N-CAMIDJ state
+// would be implemented here, similar to the Vaddio example.
+           
+//================================================================================
+// EVENT HANDLERS
+//================================================================================
+
+// --- Serial RX Handler (UDP Version) ---
+// --- Serial RX Handler (UDP Version) ---
+CHANGE From_Camera_rx$
+{
+    STRING sViscaPayload[MAX_BUFFER_SIZE];
+    STRING sPacketHeader[8];
+    STRING sExpectedHeader[8];
+    STRING sTempDebugMsg[100];
+    INTEGER nPacketLen;
+    INTEGER nPayloadType;
+    INTEGER nReceivedSeq;
+
+    WHILE(LEN(From_Camera_rx$) >= 8)
+    {
+        nPacketLen = (BYTE(From_Camera_rx$, 3) * 256) + BYTE(From_Camera_rx$, 4);
+        IF (LEN(From_Camera_rx$) < (8 + nPacketLen))
+        {
+            BREAK;
+        }
+        
+        sPacketHeader = MID(From_Camera_rx$, 1, 8);
+        sViscaPayload = MID(From_Camera_rx$, 9, nPacketLen);
+        From_Camera_rx$ = RIGHT(From_Camera_rx$, LEN(From_Camera_rx$) - (8 + nPacketLen));
+
+        nReceivedSeq = (BYTE(sPacketHeader, 5) * 16777216) + (BYTE(sPacketHeader, 6) * 65536) + (BYTE(sPacketHeader, 7) * 256) + BYTE(sPacketHeader, 8);
+        MAKESTRING(sTempDebugMsg, "RX Raw (Seq=%d): Hdr=%s Payload=%s", nReceivedSeq, FormatStringAsHex(sPacketHeader), FormatStringAsHex(sViscaPayload));
+        Debug_fb$ = sTempDebugMsg;
+
+        IF (g_bInitInProgress = 1)
+        {
+            MAKESTRING(sTempDebugMsg, "Init Check: State=%d", g_nInitializationState);
+            Debug_fb$ = sTempDebugMsg;
+            SWITCH (g_nInitializationState)
+            {
+                CASE (INIT_STATE_WAIT_RESET_ACK):
+                {
+                    sExpectedHeader = "\x02\x01\x00\x01\x00\x00\x00\x00";
+                    // ** FIX: Compound IF statement broken into nested IFs for compiler safety **
+                    IF (sPacketHeader = sExpectedHeader)
+                    {
+                        IF (BYTE(sViscaPayload, 1) = 0x01)
+                        {
+                            Debug_fb$ = "Init OK: Sequence Reset Acknowledged. Initialization Complete.";
+                            g_bInitInProgress = 0; 
+                            g_bInitialized = 1; 
+                            g_nMissedPolls = 0; 
+                            CancelWait(Master_Init_Timeout);
+                            
+                            Debug_fb$ = "--- UDP MODULE INITIALIZED ---";
+                            WAIT(250, Post_Init_Query_Delay)
+                            {
+                                CALL QueryAllStatus();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ELSE IF (g_bInitialized = 1) 
+        {
+            g_nMissedPolls = 0;
+            nPayloadType = (BYTE(sPacketHeader, 1) * 256) + BYTE(sPacketHeader, 2);
+            SWITCH (nPayloadType)
+            {
+                CASE (273): { CALL ParseResponse(sViscaPayload); }
+                CASE (513): { Debug_fb$ = "RX: Ignoring stray Control ACK."; }
+                CASE (512):
+                {
+                    IF (nPacketLen > 1 && BYTE(sViscaPayload, 1) = 0x0F && BYTE(sViscaPayload, 2) = 0x01)
+                    {
+                        Debug_fb$ = "RX CTRL ERROR: Sequence Number. Resyncing...";
+                        CALL ClearPendingQueries();
+                        IF (g_bAwaitingResync = 0)
+                        {
+                            g_bAwaitingResync = 1;
+                            WAIT(200, Resync_Wait)
+                            {
+                                SendSequenceReset();
+                                DELAY(50);
+                                g_bAwaitingResync = 0;
+                                Debug_fb$ = "Resync Complete. Ready.";
+                            }
+                        }
+                    }
+                }
+                DEFAULT: 
+                { 
+                    MAKESTRING(sTempDebugMsg, "RX: Unknown Packet Type %04X", nPayloadType);
+                    Debug_fb$ = sTempDebugMsg;
+                }
+            }
+        }
+    }
+}
+
+PUSH Query_All_Status_trig
+{
+    IF (g_bInitialized = 0) { RETURN; } // Add guard clause here as well
+    Debug_fb$ = "Query All Status Triggered";
+    Print("Query_All_Status_trig: User requested full status poll.\n");
+    CALL QueryAllStatus();
+}
+
+// --- Power ---
+PUSH Power_On_trig
+{
+    // Provide immediate feedback
+    Is_On_fb = 1;
+    Is_Off_fb = 0;
+    Is_Standby_fb = 0;
+    SendCommand("\x01\x04\x00\x02");
+    DELAY(COMMAND_DELAY_MS); // Allow command to process
+    StartQuery("\x04\x00"); // Query to confirm state
+}
+
+PUSH Power_Off_trig
+{
+    // Provide immediate feedback
+    Is_On_fb = 0;
+    Is_Off_fb = 1;
+    Is_Standby_fb = 0;
+    SendCommand("\x01\x04\x00\x03");
+    DELAY(COMMAND_DELAY_MS); // Allow command to process
+    StartQuery("\x04\x00"); // Query to confirm state
+}
+
+// --- PTZ ---
+PUSH Go_Home_trig
+{
+    SendCommand("\x01\x06\x04");
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+
+PUSH Pan_Left_trig
+{
+    STRING sCmd[10];
+    INTEGER nPanSpeed, nTiltSpeed;
+    nPanSpeed = Pan_Speed_ain;
+    nTiltSpeed = Tilt_Speed_ain;
+    IF (nPanSpeed = 0) { nPanSpeed = 12; }
+    IF (nTiltSpeed = 0) { nTiltSpeed = 7; }
+    MAKESTRING(sCmd, "\x01\x06\x01%s%s\x01\x03", CHR(nPanSpeed), CHR(nTiltSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Pan_Left_trig
+{
+    CALL SendCommand("\x01\x06\x01\x00\x00\x03\x03");
+}
+
+PUSH Pan_Right_trig
+{
+    STRING sCmd[10];
+    INTEGER nPanSpeed, nTiltSpeed;
+    nPanSpeed = Pan_Speed_ain;
+    nTiltSpeed = Tilt_Speed_ain;
+    IF (nPanSpeed = 0) { nPanSpeed = 12; }
+    IF (nTiltSpeed = 0) { nTiltSpeed = 7; }
+    MAKESTRING(sCmd, "\x01\x06\x01%s%s\x02\x03", CHR(nPanSpeed), CHR(nTiltSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Pan_Right_trig
+{
+    CALL SendCommand("\x01\x06\x01\x00\x00\x03\x03");
+}
+
+PUSH Tilt_Up_trig
+{
+    STRING sCmd[10];
+    INTEGER nPanSpeed, nTiltSpeed;
+    nPanSpeed = Pan_Speed_ain;
+    nTiltSpeed = Tilt_Speed_ain;
+    IF (nPanSpeed = 0) { nPanSpeed = 12; }
+    IF (nTiltSpeed = 0) { nTiltSpeed = 7; }
+    MAKESTRING(sCmd, "\x01\x06\x01%s%s\x03\x01", CHR(nPanSpeed), CHR(nTiltSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Tilt_Up_trig
+{
+    CALL SendCommand("\x01\x06\x01\x00\x00\x03\x03");
+}
+
+PUSH Tilt_Down_trig
+{
+    STRING sCmd[10];
+    INTEGER nPanSpeed, nTiltSpeed;
+    nPanSpeed = Pan_Speed_ain;
+    nTiltSpeed = Tilt_Speed_ain;
+    IF (nPanSpeed = 0) { nPanSpeed = 12; }
+    IF (nTiltSpeed = 0) { nTiltSpeed = 7; }
+    MAKESTRING(sCmd, "\x01\x06\x01%s%s\x03\x02", CHR(nPanSpeed), CHR(nTiltSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Tilt_Down_trig
+{
+    CALL SendCommand("\x01\x06\x01\x00\x00\x03\x03");
+}
+
+PUSH Zoom_In_trig
+{
+    STRING sCmd[10];
+    INTEGER nZoomSpeed;
+    nZoomSpeed = Zoom_Speed_ain;
+    IF (nZoomSpeed = 0) { nZoomSpeed = 3; }
+    MAKESTRING(sCmd, "\x01\x04\x07%s", CHR(0x20 + nZoomSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Zoom_In_trig
+{
+    CALL SendCommand("\x01\x04\x07\x00");
+}
+
+PUSH Zoom_Out_trig
+{
+    STRING sCmd[10];
+    INTEGER nZoomSpeed;
+    nZoomSpeed = Zoom_Speed_ain;
+    IF (nZoomSpeed = 0) { nZoomSpeed = 3; }
+    MAKESTRING(sCmd, "\x01\x04\x07%s", CHR(0x30 + nZoomSpeed));
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Zoom_Out_trig
+{
+    CALL SendCommand("\x01\x04\x07\x00");
+}
+
+PUSH Focus_Far_trig
+{
+    STRING sCmd[10];
+    INTEGER nFocusSpeed;
+    nFocusSpeed = Focus_Speed_ain;
+    IF (nFocusSpeed = 0) { nFocusSpeed = 3; }
+    ELSE IF (nFocusSpeed > 7) { nFocusSpeed = 7; }
+    sCmd = "\x01\x04\x08" + CHR(0x20 + nFocusSpeed);
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Focus_Far_trig
+{
+    CALL SendCommand("\x01\x04\x08\x00");
+}
+
+PUSH Focus_Near_trig
+{
+    STRING sCmd[10];
+    INTEGER nFocusSpeed;
+    nFocusSpeed = Focus_Speed_ain;
+    IF (nFocusSpeed = 0) { nFocusSpeed = 3; }
+    ELSE IF (nFocusSpeed > 7) { nFocusSpeed = 7; }
+    sCmd = "\x01\x04\x08" + CHR(0x30 + nFocusSpeed);
+    CALL SendCommand(sCmd);
+    DELAY(COMMAND_DELAY_MS);
+    CALL HandleManualMovementOverrides();
+}
+RELEASE Focus_Near_trig
+{
+    CALL SendCommand("\x01\x04\x08\x00");
+}
+
+// --- Auto Framing ---
+PUSH Start_Auto_Framing_trig
+{
+    // When starting auto framing, clear any active preset feedback
+    CALL ClearAllPresetFeedback();
+    SendCommand("\x01\x7E\x04\x3A\x01");
+    Auto_Framing_Is_On_fb = 1; // Immediate feedback
+    Debug_fb$ = "CMD: Start Auto Framing, Presets Cleared";
+}
+PUSH Stop_Auto_Framing_trig
+{
+    SendCommand("\x01\x7E\x04\x3A\x00");
+    Auto_Framing_Is_On_fb = 0; // Immediate feedback
+    Debug_fb$ = "CMD: Stop Auto Framing";
+}
+PUSH Query_Auto_Framing_trig   { SendInquiry("\x09\x7E\x04\x3A"); }
+
+// --- Tally Light Handlers ---
+
+PUSH Tally_On_trig
+{
+    g_bIsTallyActive = 1;
+    Is_Tally_On_fb = 1; 
+    Debug_fb$ = "Tally On Triggered";
+    Print("Tally_On_trig: Tally Active. Sending initial ON command.\n");
+    
+    // Send the initial Tally ON command
+    SendCommand("\x01\x7E\x01\x0A\x00\x02");
+    
+    // Start the recursive keep-alive sequence
+    CALL ScheduleTallyKeepAlive();
+}
+
+PUSH Tally_Off_trig
+{
+    g_bIsTallyActive = 0;
+    Is_Tally_On_fb = 0; 
+    Debug_fb$ = "Tally Off Triggered";
+    Print("Tally_Off_trig: Tally Inactive. Cancelling keep-alive and sending OFF command.\n");
+    
+    // Stop the keep-alive loop by cancelling the pending WAIT
+    CancelWait(Tally_Keep_Alive);
+    
+    // Send the Tally OFF command
+    SendCommand("\x01\x7E\x01\x0A\x00\x03");
+}
+
+PUSH Auto_Focus_On_trig
+{
+    Is_Auto_Focus_On_fb = 1; // Immediate feedback
+    SendCommand("\x01\x04\x38\x02");
+}
+
+PUSH Auto_Focus_Off_trig
+{
+    Is_Auto_Focus_On_fb = 0; // Immediate feedback
+    SendCommand("\x01\x04\x38\x03");
+}
+
+// --- Direct CCU Set Handlers (Corrected Nibble Format) ---
+PUSH Set_Red_Gain_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue, p1, p2;
+    nValue = Set_Red_Gain_Level_ain;
+    // VISCA Command: R.GAIN Direct (8x 01 04 43 00 00 0p 0p FF)
+    p1 = nValue / 16;
+    p2 = nValue MOD 16;
+    MAKESTRING(sCmd, "\x01\x04\x43\x00\x00%s%s", CHR(p1), CHR(p2));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Red Gain Direct to " + ITOA(nValue);
+}
+
+PUSH Set_Blue_Gain_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue, p1, p2;
+    nValue = Set_Blue_Gain_Level_ain;
+    // VISCA Command: B.GAIN Direct (8x 01 04 44 00 00 0p 0p FF)
+    p1 = nValue / 16;
+    p2 = nValue MOD 16;
+    MAKESTRING(sCmd, "\x01\x04\x44\x00\x00%s%s", CHR(p1), CHR(p2));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Blue Gain Direct to " + ITOA(nValue);
+}
+
+PUSH Set_Aperture_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue, p1, p2;
+    // Detail/Aperture expects a value from 0-15.
+    nValue = Set_Aperture_Level_ain;
+    IF (nValue > 15) { nValue = 15; }
+    // VISCA Command: Detail Direct (8x 01 04 42 00 00 0p 0p FF)
+    p1 = nValue / 16;
+    p2 = nValue MOD 16;
+    MAKESTRING(sCmd, "\x01\x04\x42\x00\x00%s%s", CHR(p1), CHR(p2));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Aperture Direct to " + ITOA(nValue);
+}
+
+// --- Exposure Modes ---
+PUSH Exposure_Mode_Auto_trig
+{
+    // Provide immediate feedback
+    Is_AE_Mode_Auto_fb = 1;
+    Is_AE_Mode_Manual_fb = 0;
+    Is_AE_Mode_Shutter_Priority_fb = 0;
+    Is_AE_Mode_Iris_Priority_fb = 0;
+    SendCommand("\x01\x04\x39\x00");
+}
+
+PUSH Exposure_Mode_Manual_trig
+{
+    // Provide immediate feedback
+    Is_AE_Mode_Auto_fb = 0;
+    Is_AE_Mode_Manual_fb = 1;
+    Is_AE_Mode_Shutter_Priority_fb = 0;
+    Is_AE_Mode_Iris_Priority_fb = 0;
+    SendCommand("\x01\x04\x39\x03");
+}
+
+PUSH Exposure_Mode_Shutter_Priority_trig
+{
+    // Provide immediate feedback
+    Is_AE_Mode_Auto_fb = 0;
+    Is_AE_Mode_Manual_fb = 0;
+    Is_AE_Mode_Shutter_Priority_fb = 1;
+    Is_AE_Mode_Iris_Priority_fb = 0;
+    SendCommand("\x01\x04\x39\x0A");
+}
+
+PUSH Exposure_Mode_Iris_Priority_trig
+{
+    // Provide immediate feedback
+    Is_AE_Mode_Auto_fb = 0;
+    Is_AE_Mode_Manual_fb = 0;
+    Is_AE_Mode_Shutter_Priority_fb = 0;
+    Is_AE_Mode_Iris_Priority_fb = 1;
+    SendCommand("\x01\x04\x39\x0B");
+}
+
+PUSH WDR_On_trig
+{
+    WDR_Is_On_fb = 1; // Immediate feedback
+    SendCommand("\x01\x04\x3D\x02");
+}
+
+PUSH WDR_Off_trig
+{
+    WDR_Is_On_fb = 0; // Immediate feedback
+    SendCommand("\x01\x04\x3D\x03");
+}
+
+// --- Direct Set Triggers ---
+// Sets Shutter speed directly from the analog input (pg. 14)
+PUSH Set_Shutter_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue;
+    nValue = LOW(Set_Shutter_Level_ain);
+    MAKESTRING(sCmd, "\x01\x04\x4A\x00\x00\x00%s", CHR(nValue));
+    CALL SendCommand(sCmd);
+}
+// Sets Gain level directly from the analog input (pg. 14)
+PUSH Set_Gain_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue;
+    nValue = LOW(Set_Gain_Level_ain);
+    MAKESTRING(sCmd, "\x01\x04\x4C\x00\x00\x00%s", CHR(nValue));
+    CALL SendCommand(sCmd);
+}
+// Sets Exposure Compensation level directly from the analog input (pg. 14)
+PUSH Set_Exposure_Comp_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue;
+    nValue = LOW(Set_Exposure_Comp_Level_ain);
+    MAKESTRING(sCmd, "\x01\x04\x4E\x00\x00\x00%s", CHR(nValue));
+    CALL SendCommand(sCmd);
+}
+// Sets AE response speed from the analog input (pg. 14)
+PUSH Set_AE_Speed_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue;
+    nValue = LOW(Set_AE_Speed_ain);
+    MAKESTRING(sCmd, "\x01\x04\x5D%s", CHR(nValue));
+    CALL SendCommand(sCmd);
+}
+// Sets White Balance offset from the analog input (pg. 15)
+PUSH Set_WB_Offset_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue;
+    nValue = LOW(Set_WB_Offset_ain);
+    MAKESTRING(sCmd, "\x01\x7E\x01\x2E\x01%s", CHR(nValue));
+    CALL SendCommand(sCmd);
+}
+
+// --- Exposure Comp Controls ---
+PUSH Exposure_Comp_On_trig      { SendCommand("\x01\x04\x3E\x02"); }
+PUSH Exposure_Comp_Off_trig     { SendCommand("\x01\x04\x3E\x03"); }
+PUSH Exposure_Comp_Up_trig      { SendCommand("\x01\x04\x0E\x02"); }
+PUSH Exposure_Comp_Down_trig    { SendCommand("\x01\x04\x0E\x03"); }
+PUSH Exposure_Comp_Reset_trig   { SendCommand("\x01\x04\x0E\x00"); }
+
+// --- Image Toggles ---
+PUSH Image_Stabilizer_On_trig    { SendCommand("\x01\x04\x34\x02"); }
+PUSH Image_Stabilizer_Off_trig   { SendCommand("\x01\x04\x34\x03"); }
+PUSH Flicker_Cancel_On_trig      { SendCommand("\x01\x04\x32\x02"); }
+PUSH Flicker_Cancel_Off_trig     { SendCommand("\x01\x04\x32\x03"); }
+PUSH Picture_Effect_BW_trig      { SendCommand("\x01\x04\x63\x04"); } // Sets effect to Black & White
+PUSH Picture_Effect_Off_trig     { SendCommand("\x01\x04\x63\x00"); } // Turns effect off
+PUSH Defog_On_trig               { SendCommand("\x01\x04\x37\x02"); } // Command uses a default level
+PUSH Defog_Off_trig              { SendCommand("\x01\x04\x37\x03"); }
+
+// --- System/Menu Controls ---
+PUSH Menu_On_trig                    { SendCommand("\x01\x06\x06\x02"); }
+PUSH Menu_Off_trig                   { SendCommand("\x01\x06\x06\x03"); }
+PUSH Menu_Enter_trig                 { SendCommand("\x01\x7E\x01\x02\x00\x01"); }
+// --- Menu Navigation ---
+// Uses Pan/Tilt Drive commands, which are remapped for menu navigation when the OSD is active.
+// Note: A default speed is used, as speed is irrelevant for single-step menu navigation.
+PUSH Menu_Up_trig      { SendCommand("\x01\x06\x01\x01\x01\x03\x01"); } // Pan/Tilt Drive Up (pg. 18)
+PUSH Menu_Down_trig    { SendCommand("\x01\x06\x01\x01\x01\x03\x02"); } // Pan/Tilt Drive Down (pg. 18)
+PUSH Menu_Left_trig    { SendCommand("\x01\x06\x01\x01\x01\x01\x03"); } // Pan/Tilt Drive Left (pg. 18)
+PUSH Menu_Right_trig   { SendCommand("\x01\x06\x01\x01\x01\x02\x03"); } // Pan/Tilt Drive Right (pg. 18)
+PUSH Menu_Toggle_trig  { SendCommand("\x01\x06\x06\x10"); } // Menu On/Off Toggle (pg. 19)
+PUSH Set_Standby_Mode_Side_trig      { SendCommand("\x01\x7E\x04\x50\x02"); }
+PUSH Set_Standby_Mode_Neutral_trig   { SendCommand("\x01\x7E\x04\x50\x03"); }
+                                                                                 
+// --- Video Mute ---
+PUSH Video_Mute_On_trig
+{
+	// NOTE: This command is not in the SRG-A40/A12 manual but is a standard VISCA command.
+	// Functionality depends on camera firmware supporting it.
+	SendCommand("\x01\x04\x75\x02");
+	Video_Is_Muted_fb = 1; // Immediate feedback
+	Debug_fb$ = "CMD: Video Mute On";
+}
+PUSH Video_Mute_Off_trig
+{
+	SendCommand("\x01\x04\x75\x03");
+	Video_Is_Muted_fb = 0; // Immediate feedback
+	Debug_fb$ = "CMD: Video Mute Off";
+}
+
+// --- Image Toggles & Modes ---
+PUSH Image_Flip_On_trig
+{
+    SendCommand("\x01\x04\x66\x02");
+    Is_Image_Flip_On_fb = 1; // Immediate feedback
+    Debug_fb$ = "CMD: Image Flip On";
+}
+PUSH Image_Flip_Off_trig
+{
+    SendCommand("\x01\x04\x66\x03");
+    Is_Image_Flip_On_fb = 0; // Immediate feedback
+    Debug_fb$ = "CMD: Image Flip Off";
+}
+PUSH Tele_Convert_On_trig
+{
+    SendCommand("\x01\x7E\x04\x36\x02");
+    Is_Tele_Convert_On_fb = 1; // Immediate feedback
+    Debug_fb$ = "CMD: Tele Convert On";
+}
+PUSH Tele_Convert_Off_trig
+{
+    SendCommand("\x01\x7E\x04\x36\x03");
+    Is_Tele_Convert_On_fb = 0; // Immediate feedback
+    Debug_fb$ = "CMD: Tele Convert Off";
+}
+PUSH High_Sensitivity_On_trig
+{
+    SendCommand("\x01\x04\x5E\x02");
+    Is_High_Sensitivity_On_fb = 1; // Immediate feedback
+    Debug_fb$ = "CMD: High Sensitivity On";
+}
+PUSH High_Sensitivity_Off_trig
+{
+    SendCommand("\x01\x04\x5E\x03");
+    Is_High_Sensitivity_On_fb = 0; // Immediate feedback
+    Debug_fb$ = "CMD: High Sensitivity Off";
+}
+PUSH Backlight_Comp_On_trig
+{
+    SendCommand("\x01\x04\x33\x02");
+    Backlight_Is_On_fb = 1; // Immediate feedback
+    Debug_fb$ = "CMD: Backlight On";
+}
+PUSH Backlight_Comp_Off_trig
+{
+    SendCommand("\x01\x04\x33\x03");
+    Backlight_Is_On_fb = 0; // Immediate feedback
+    Debug_fb$ = "CMD: Backlight Off";
+}
+
+// --- White Balance ---
+PUSH WB_Mode_Auto_trig
+{
+    SendCommand("\x01\x04\x35\x00");
+    Debug_fb$ = "CMD: WB Mode Auto";
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x35");
+}
+PUSH WB_Mode_Indoor_trig
+{
+    SendCommand("\x01\x04\x35\x01");
+    Debug_fb$ = "CMD: WB Mode Indoor";
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x35");
+}
+PUSH WB_Mode_Outdoor_trig
+{
+    SendCommand("\x01\x04\x35\x02");
+    Debug_fb$ = "CMD: WB Mode Outdoor";
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x35");
+}
+PUSH WB_Mode_One_Push_trig
+{
+    SendCommand("\x01\x04\x35\x03");
+    Debug_fb$ = "CMD: WB Mode One Push";
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x35");
+}
+PUSH WB_Mode_Manual_trig
+{
+    SendCommand("\x01\x04\x35\x05");
+    Debug_fb$ = "CMD: WB Mode Manual";
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x35");
+}
+PUSH Trigger_One_Push_WB_Calibrate_trig
+{
+    SendCommand("\x01\x04\x10\x05");
+    Debug_fb$ = "CMD: Trigger One Push WB";
+}
+
+// --- Pan & Tilt ---
+PUSH Pan_Tilt_Reset_trig
+{
+    SendCommand("\x01\x06\x05");
+    Debug_fb$ = "CMD: Pan/Tilt Reset";
+    CALL HandleManualMovementOverrides();
+}
+PUSH Set_Absolute_Position_trig
+{
+    STRING sCmd[20];
+    INTEGER nPanPos, nTiltPos, nPanSpeed;
+    INTEGER p1, p2, p3, p4;
+    INTEGER t1, t2, t3, t4;
+
+    nPanPos = Absolute_Pan_Position_ain;
+    nTiltPos = Absolute_Tilt_Position_ain;
+    nPanSpeed = Pan_Speed_ain;
+    IF (nPanSpeed = 0) { nPanSpeed = 12; }
+
+    p1 = (nPanPos & 0xF000) >> 12;
+    p2 = (nPanPos & 0x0F00) >> 8;
+    p3 = (nPanPos & 0x00F0) >> 4;
+    p4 = (nPanPos & 0x000F);
+
+    t1 = (nTiltPos & 0xF000) >> 12;
+    t2 = (nTiltPos & 0x0F00) >> 8;
+    t3 = (nTiltPos & 0x00F0) >> 4;
+    t4 = (nTiltPos & 0x000F);
+
+    MAKESTRING(sCmd, "\x01\x06\x02%s\x00%s%s%s%s%s%s%s%s", CHR(nPanSpeed), CHR(p1), CHR(p2), CHR(p3), CHR(p4), CHR(t1), CHR(t2), CHR(t3), CHR(t4));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Absolute PTZ Position";
+    CALL HandleManualMovementOverrides();
+}
+
+// --- Zoom & Focus ---
+PUSH Set_Zoom_Position_trig
+{
+    STRING sCmd[15];
+    INTEGER nZoomPos;
+    INTEGER z1, z2, z3, z4;
+
+    nZoomPos = Set_Zoom_Position_ain;
+    z1 = (nZoomPos & 0xF000) >> 12;
+    z2 = (nZoomPos & 0x0F00) >> 8;
+    z3 = (nZoomPos & 0x00F0) >> 4;
+    z4 = (nZoomPos & 0x000F);
+
+    MAKESTRING(sCmd, "\x01\x04\x47%s%s%s%s", CHR(z1), CHR(z2), CHR(z3), CHR(z4));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Absolute Zoom Position";
+    CALL HandleManualMovementOverrides();
+}
+
+PUSH Auto_Focus_Toggle_trig
+{
+    IF (Is_Auto_Focus_On_fb = 1)
+    {
+        SendCommand("\x01\x04\x38\x03"); // Turn AF Off
+        Is_Auto_Focus_On_fb = 0; // Immediate feedback
+        Debug_fb$ = "CMD: AF Toggled Off";
+    }
+    ELSE
+    {
+        SendCommand("\x01\x04\x38\x02"); // Turn AF On
+        Is_Auto_Focus_On_fb = 1; // Immediate feedback
+        Debug_fb$ = "CMD: AF Toggled On";
+    }
+}
+PUSH Trigger_One_Push_Focus_trig
+{
+    SendCommand("\x01\x04\x18\x01");
+    Debug_fb$ = "CMD: Trigger One Push Focus";
+}
+
+// --- Manual Value Controls ---
+PUSH Iris_Up_trig
+{
+    SendCommand("\x01\x04\x0B\x02");
+    Debug_fb$ = "CMD: Iris Up";
+}
+PUSH Iris_Down_trig
+{
+    SendCommand("\x01\x04\x0B\x03");
+    Debug_fb$ = "CMD: Iris Down";
+}
+PUSH Gain_Up_trig
+{
+    SendCommand("\x01\x04\x0C\x02");
+    Debug_fb$ = "CMD: Gain Up";
+}
+PUSH Gain_Down_trig
+{
+    SendCommand("\x01\x04\x0C\x03");
+    Debug_fb$ = "CMD: Gain Down";
+}
+PUSH Shutter_Up_trig
+{
+    SendCommand("\x01\x04\x0A\x02");
+    Debug_fb$ = "CMD: Shutter Up";
+}
+PUSH Shutter_Down_trig
+{
+    SendCommand("\x01\x04\x0A\x03");
+    Debug_fb$ = "CMD: Shutter Down";
+}
+
+PUSH Set_Iris_Level_trig
+{
+    STRING sCmd[10];
+    INTEGER nValue, p1, p2;
+    nValue = Set_Iris_Level_ain;
+    // Clamp to valid range 0x00-0x19 (0-25)
+    IF (nValue > 0x19) { nValue = 0x19; }
+    p1 = nValue / 16; // High nibble
+    p2 = nValue MOD 16; // Low nibble
+    MAKESTRING(sCmd, "\x01\x04\x4B\x00\x00%s%s", CHR(p1), CHR(p2));
+    CALL SendCommand(sCmd);
+    Debug_fb$ = "CMD: Set Iris Direct to " + ITOA(nValue);
+}
+
+// --- Presets ---
+PUSH Store_Preset_trig
+{
+    Store_Preset_Active = !Store_Preset_Active;
+    Debug_fb$ = "CMD: Store Preset Mode Toggled: " + ITOA(Store_Preset_Active);
+    // When active, the next 'Recall' press will store to that number instead.
+}
+PUSH Recall_Preset_trig
+{
+    INTEGER nPreset;
+    nPreset = Preset_Number_ain;
+    IF (Store_Preset_Active = 1)
+    {
+        CALL SendPresetCommand(1, nPreset); // Action 1 = Set
+        Debug_fb$ = "CMD: Storing Preset " + ITOA(nPreset);
+        Store_Preset_Active = 0; // Deactivate store mode after use
+    }
+    ELSE
+    {
+        CALL SendPresetRecall(nPreset);
+        Debug_fb$ = "CMD: Recalling Preset " + ITOA(nPreset);
+    }
+}
+PUSH Clear_Preset_trig
+{
+    INTEGER nPreset;
+    nPreset = Preset_Number_ain;
+    CALL SendPresetCommand(0, nPreset); // Action 0 = Reset
+    Debug_fb$ = "CMD: Clearing Preset " + ITOA(nPreset);
+    IF (g_nCurrentPreset = nPreset)
+    {
+        CALL ClearAllPresetFeedback();
+    }
+}
+PUSH Recall_Preset_1_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 0); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(1);} }
+PUSH Recall_Preset_2_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 1); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(2);} }
+PUSH Recall_Preset_3_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 2); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(3);} }
+PUSH Recall_Preset_4_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 3); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(4);} }
+PUSH Recall_Preset_5_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 4); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(5);} }
+PUSH Recall_Preset_6_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 5); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(6);} }
+PUSH Recall_Preset_7_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 6); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(7);} }
+PUSH Recall_Preset_8_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 7); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(8);} }
+
+// --- C2N-CAMIDJ Handlers ---
+  
+//***************C2N-CAMIDJ Handlers***************
+
+//***************C2N-CAMIDJ Handlers***************
+
+PUSH C2N_CAMIDJ_Focus_Button_trig
+{
+    g_nCAMIDJ_Mode = MODE_FOCUS;
+    CALL SendCommand("\x01\x04\x38\x03"); // Set to Manual Focus for wheel control
+    CALL UpdateCAMIDJFeedback();
+    CALL UpdateActivityTimestamp(); // Start/reset the 30-second timeout
+}
+
+PUSH C2N_CAMIDJ_Iris_Manual_Button_trig
+{
+    // MODIFIED: Added emulated feedback for the LED state.
+    g_nCAMIDJ_Mode = MODE_IRIS;
+    Is_AE_Mode_Auto_fb = 0; // Immediately set state to manual for feedback
+    CALL SendCommand("\x01\x04\x39\x03"); // Send command to set AE Mode to Manual
+    Debug_fb$ = "CAMIDJ: Iris Manual Mode";
+    Print("DEBUG: Button Push | Action: Set Manual Iris Mode\n");
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x4B"); // VISCA Inquiry: Iris Level
+    
+    CALL UpdateActivityTimestamp();
+    CALL UpdateCAMIDJFeedback(); // Update LEDs using the new emulated state
+}
+
+PUSH C2N_CAMIDJ_Iris_Auto_Button_trig
+{
+    g_nCAMIDJ_Mode = MODE_IRIS;
+    CALL SendCommand("\x01\x04\x39\x00"); // Set AE Mode to Auto
+    Debug_fb$ = "CAMIDJ: Iris Auto Mode";
+    // Query the new AE mode to ensure the LED feedback is accurate.
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x39"); // VISCA Inquiry: AE Mode
+
+    CALL UpdateActivityTimestamp();
+    CALL UpdateCAMIDJFeedback();
+}
+
+PUSH C2N_CAMIDJ_Zoom_Button_trig { g_nCAMIDJ_Mode = MODE_ZOOM_SPEED; CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
+PUSH C2N_CAMIDJ_Pan_Button_trig  { g_nCAMIDJ_Mode = MODE_PAN_SPEED;  CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
+PUSH C2N_CAMIDJ_Tilt_Button_trig { g_nCAMIDJ_Mode = MODE_TILT_SPEED; CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
+
+PUSH C2N_CAMIDJ_Speed_Fast_trig { g_nCAMIDJ_SpeedMode = SPEED_FAST; CALL UpdateCAMIDJFeedback(); }
+PUSH C2N_CAMIDJ_Speed_Slow_trig { g_nCAMIDJ_SpeedMode = SPEED_SLOW; CALL UpdateCAMIDJFeedback(); }
+
+PUSH C2N_CAMIDJ_Wheel_Clockwise_trig
+{
+    IF (g_nCAMIDJ_Mode = MODE_DEFAULT) { RETURN; } 
+    IF (g_bWheelIsMoving = 1) { RETURN; }
+    g_bWheelIsMoving = 1;
+    CALL UpdateActivityTimestamp(); 
+    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x02"); }      // Focus Far
+    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS) { CALL StartIrisRamp(3); }      // Corrected: Iris Down
+}
+
+PUSH C2N_CAMIDJ_Wheel_Counter_Clockwise_trig
+{
+    IF (g_nCAMIDJ_Mode = MODE_DEFAULT) { RETURN; } 
+    IF (g_bWheelIsMoving = 1) { RETURN; }
+    g_bWheelIsMoving = 1;
+    CALL UpdateActivityTimestamp(); 
+    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x03"); }      // Focus Near
+    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS) { CALL StartIrisRamp(2); }      // Corrected: Iris Up
+}
+
+PUSH C2N_CAMIDJ_Wheel_Stopped_trig
+{
+    g_bWheelIsMoving = 0;
+    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x00"); } // Focus Stop
+    CALL UpdateCAMIDJFeedback(); // Update display with final speed value
+}
+
+CHANGE C2N_CAMIDJ_Speed_Adjust_ain
+{
+    IF (g_bIsProcessingSpeedAdjust = 0)
+    {
+        g_bIsProcessingSpeedAdjust = 1;
+        WAIT(5)
+        {
+            INTEGER nNewValue;
+            IF (g_bWheelIsMoving = 1)
+            {
+                nNewValue = C2N_CAMIDJ_Speed_Adjust_ain;
+                SWITCH(g_nCAMIDJ_Mode)
+                {
+                    CASE (MODE_PAN_SPEED):
+                    {
+                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
+                        {
+                            g_nPanSpeed_Fast = MulDiv(nNewValue, 23, 65535) + 1;
+                            IF (g_nPanSpeed_Fast < g_nPanSpeed_Slow) { g_nPanSpeed_Slow = g_nPanSpeed_Fast; }
+                        }
+                        ELSE
+                        {
+                            g_nPanSpeed_Slow = MulDiv(nNewValue, 23, 65535) + 1;
+                            IF (g_nPanSpeed_Slow > g_nPanSpeed_Fast) { g_nPanSpeed_Fast = g_nPanSpeed_Slow; }
+                        }
+                    }
+                    CASE (MODE_TILT_SPEED):
+                    {
+                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
+                        {
+                            g_nTiltSpeed_Fast = MulDiv(nNewValue, 22, 65535) + 1;
+                            IF (g_nTiltSpeed_Fast < g_nTiltSpeed_Slow) { g_nTiltSpeed_Slow = g_nTiltSpeed_Fast; }
+                        }
+                        ELSE
+                        {
+                            g_nTiltSpeed_Slow = MulDiv(nNewValue, 22, 65535) + 1;
+                            IF (g_nTiltSpeed_Slow > g_nTiltSpeed_Fast) { g_nTiltSpeed_Fast = g_nTiltSpeed_Slow; }
+                        }
+                    }
+                    CASE (MODE_ZOOM_SPEED):
+                    {
+                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
+                        {
+                            g_nZoomSpeed_Fast = MulDiv(nNewValue, 7, 65535);
+                            IF (g_nZoomSpeed_Fast < g_nZoomSpeed_Slow) { g_nZoomSpeed_Slow = g_nZoomSpeed_Fast; }
+                        }
+                        ELSE
+                        {
+                            g_nZoomSpeed_Slow = MulDiv(nNewValue, 7, 65535);
+                            IF (g_nZoomSpeed_Slow > g_nZoomSpeed_Fast) { g_nZoomSpeed_Fast = g_nZoomSpeed_Slow; }
+                        }
+                    }
+                }
+            }
+            g_bIsProcessingSpeedAdjust = 0;
+        }
+    }
+}
+
+CHANGE C2N_CAMIDJ_Pan_ain
+{
+    IF (g_bInitialized = 1)
+    {
+        g_nPanPosition = C2N_CAMIDJ_Pan_ain;
+        CALL CheckJoystickMovement();
+    }
+}
+
+CHANGE C2N_CAMIDJ_Tilt_ain
+{
+    IF (g_bInitialized = 1)
+    {
+        g_nTiltPosition = C2N_CAMIDJ_Tilt_ain;
+        CALL CheckJoystickMovement();
+    }
+}
+
+CHANGE C2N_CAMIDJ_Zoom_ain
+{
+    IF (g_bInitialized = 1)
+    {
+        g_nZoomPosition = C2N_CAMIDJ_Zoom_ain;
+        CALL CheckJoystickMovement();
+    }
+}
+
+//================================================================================
+// MAIN FUNCTION
+//================================================================================
+FUNCTION MAIN()
+{
+    // Initialize all state-tracking variables to a known default on startup
+    g_nSequenceNumber = 0;
+    g_bInitialized = 0;
+    g_bWaitingForResponse = 0;
+    g_sLastQuery = "";
+    g_nCurrentPreset = -1; 
+    g_nQueryStep = 0;
+    g_bAwaitingResync = 0;
+    g_bIsTallyActive = 0;
+    g_nInitializationState = INIT_STATE_START;
+    g_bInitInProgress = 0;
+    g_bWaitingForPingResponse = 0;
+    g_nPingFailCount = 0;
+    g_nMissedPolls = 0;
+    g_bIsPolling = 0;
+
+    // C2N-CAMIDJ state flags
+    g_bJoystickIsActive = 0;
+    g_bWheelIsMoving = 0;
+    g_bIsProcessingSpeedAdjust = 0;
+    g_nLastZoomSpeed = 0;
+	g_nLastZoomDir = 0;
+	g_nLastPanSpeed = 0;
+	g_nLastPanDir = 3; // Corrected: Set to stop state
+	g_nLastTiltSpeed = 0;
+	g_nLastTiltDir = 3; // Corrected: Set to stop state
+    g_lMaxSignedLongInt = 2147483647;
+    IF (g_bFirstRun = 0)
+    {
+        g_bFirstRun = 1;
+        // Speeds initialized to 40% (Slow) and 60% (Fast) of their respective ranges
+        g_nPanSpeed_Slow = 10; g_nPanSpeed_Fast = 15; 
+        g_nTiltSpeed_Slow = 10; g_nTiltSpeed_Fast = 14;
+        g_nZoomSpeed_Slow = 3;  g_nZoomSpeed_Fast = 4;
+    }
+
+    // Start in the default (blank) mode
+    g_nCAMIDJ_Mode = MODE_DEFAULT;
+    // Set speed mode to slow by default on startup
+    g_nCAMIDJ_SpeedMode = SPEED_SLOW;
+    
+    // ** NEW: Initialize joystick positions to center to prevent startup movement **
+    g_nPanPosition = 32768;
+    g_nTiltPosition = 32768;
+    g_nZoomPosition = 32768;
+
+    // Start the recurring timeout checker loop
+    CALL StartModeTimeoutChecker();
+
+    Debug_fb$ = "Debug: MAIN() started. Waiting 5s for network to stabilize...";
+    // Start the KeepAliveLoop immediately. It will wait for g_bInitialized = 1.
+    CALL KeepAliveLoop();
+    // Start the first initialization attempt after a delay.
+    WAIT(500, Initial_Startup_Delay)
+    {
+        CALL StartInitAttempt();
+    }
+}
