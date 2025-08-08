@@ -3,7 +3,7 @@
 *******************************************************************************************/
 /*
 Dealer Name: NC State DELTA
-System Name: Sony SRG-A40 / SRG-A12 VISCA over IP Control v1.0
+System Name: Sony SRG-A40 / SRG-A12 VISCA over IP Control v1.2
 Programmer: Brandon DeHart / Gemini 2.5 Pro
 Comments: This module provides comprehensive VISCA over IP control for Sony SRG-A40
           and SRG-A12 cameras, with integrated support for the C2N-CAMIDJ joystick.
@@ -12,7 +12,7 @@ Comments: This module provides comprehensive VISCA over IP control for Sony SRG-
 //================================================================================
 // COMPILER DIRECTIVES
 //================================================================================
-#SYMBOL_NAME "Sony SRG-A40 A12 VISCA IP C2N-CAMIDJ v1.1"
+#SYMBOL_NAME "Sony SRG-A40 A12 VISCA IP C2N-CAMIDJ v1.2"
 #HINT "Full VISCA over IP control for Sony SRG-A40/A12 with C2N-CAMIDJ support."
 #PRINT_TO_TRACE
 #ENABLE_STACK_CHECKING
@@ -221,6 +221,7 @@ ANALOG_INPUT   C2N_CAMIDJ_Pan_ain;              ANALOG_OUTPUT  C2N_CAMIDJ_Displa
 ANALOG_INPUT   C2N_CAMIDJ_Tilt_ain;             ANALOG_OUTPUT  C2N_CAMIDJ_Display_Mode_aout;
 ANALOG_INPUT   C2N_CAMIDJ_Zoom_ain;             ANALOG_OUTPUT  _SKIP_;
 ANALOG_INPUT   C2N_CAMIDJ_Speed_Adjust_ain;     ANALOG_OUTPUT  _SKIP_;
+ANALOG_INPUT   C2N_CAMIDJ_Wheel_Rate_ain;       ANALOG_OUTPUT  _SKIP_;
 
 //-------------------- Serial Inputs / Outputs --------------------
 STRING_INPUT   _SKIP_;                          STRING_OUTPUT  Model_Name_fb$;
@@ -251,17 +252,20 @@ INTEGER g_bInitInProgress;
 INTEGER g_nMissedPolls;
 INTEGER g_bIsPolling;
 INTEGER g_bQueryAEAfterPreset;
+INTEGER g_bManualFocusFlashing;
 
 // C2N-CAMIDJ State
 Nonvolatile INTEGER g_bFirstRun;
 Nonvolatile INTEGER g_nCAMIDJ_Mode;
 Nonvolatile INTEGER g_nCAMIDJ_SpeedMode;
-Nonvolatile INTEGER g_nPanSpeed_Slow, g_nPanSpeed_Fast;
-Nonvolatile INTEGER g_nTiltSpeed_Slow, g_nTiltSpeed_Fast;
-Nonvolatile INTEGER g_nZoomSpeed_Slow, g_nZoomSpeed_Fast;
+Nonvolatile INTEGER g_nPanSpeed_Slow_raw, g_nPanSpeed_Fast_raw;
+Nonvolatile INTEGER g_nTiltSpeed_Slow_raw, g_nTiltSpeed_Fast_raw;
+Nonvolatile INTEGER g_nZoomSpeed_Slow_raw, g_nZoomSpeed_Fast_raw;
+Nonvolatile INTEGER g_nLastPanSpeedDisplay_raw, g_nLastTiltSpeedDisplay_raw, g_nLastZoomSpeedDisplay_raw;
 INTEGER g_bJoystickIsActive;
 INTEGER g_bWheelIsMoving;
 INTEGER g_bIsProcessingSpeedAdjust;
+INTEGER g_bIsProcessingWheel; 
 INTEGER g_nLastZoomSpeed;
 INTEGER g_nLastZoomDir;
 INTEGER g_nLastPanSpeed;
@@ -270,7 +274,7 @@ INTEGER g_nLastTiltSpeed;
 INTEGER g_nLastTiltDir;
 INTEGER g_nPanPosition, g_nTiltPosition, g_nZoomPosition;
 SIGNED_LONG_INTEGER g_lLastActivityTimestamp;
-SIGNED_LONG_INTEGER g_lMaxSignedLongInt;                
+SIGNED_LONG_INTEGER g_lMaxSignedLongInt;         
 
 //================================================================================
 // HELPER FUNCTIONS
@@ -558,61 +562,62 @@ FUNCTION UpdateCAMIDJFeedback()
     INTEGER nDisplayValue;
     nDisplayValue = 0;
 
-    // --- Set Mode Feedback LEDs (Timeout Aware) ---
-    C2N_CAMIDJ_Focus_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_FOCUS); 
+    // --- Set Mode Feedback LEDs ---
+    // If the flasher is not running, control the focus LED based on the current mode.
+    // If the flasher IS running, it retains control of the LED.
+    IF (g_bManualFocusFlashing = 0)
+    {
+        C2N_CAMIDJ_Focus_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_FOCUS);
+    }
     C2N_CAMIDJ_Zoom_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_ZOOM_SPEED);
     C2N_CAMIDJ_Pan_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_PAN_SPEED);
-    C2N_CAMIDJ_Tilt_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_TILT_SPEED); 
+    C2N_CAMIDJ_Tilt_Button_Is_Active_fb = (g_nCAMIDJ_Mode = MODE_TILT_SPEED);
     // --- Iris Feedback ---
     C2N_CAMIDJ_Iris_Auto_Button_Is_Active_fb = Is_AE_Mode_Auto_fb;
-    C2N_CAMIDJ_Iris_Manual_Button_Is_Active_fb = !Is_AE_Mode_Auto_fb; 
-
-    // --- MODIFIED: Speed Mode LED Feedback is now ALWAYS active ---
-    // This ensures the speed LEDs are always lit based on the current speed mode,
-    // regardless of the active adjustment mode (Pan, Tilt, Zoom, Focus, etc.).
-    Print("UpdateCAMIDJFeedback: Setting Speed LEDs. SpeedMode=%d\n", g_nCAMIDJ_SpeedMode);
+    C2N_CAMIDJ_Iris_Manual_Button_Is_Active_fb = !Is_AE_Mode_Auto_fb;
+    // --- Speed Mode LED Feedback ---
     C2N_CAMIDJ_Speed_Fast_Is_Active_fb = (g_nCAMIDJ_SpeedMode = SPEED_FAST);
     C2N_CAMIDJ_Speed_Slow_Is_Active_fb = (g_nCAMIDJ_SpeedMode = SPEED_SLOW);
-
+    
     // --- Set Display Mode and Value ---
     SWITCH (g_nCAMIDJ_Mode)
     {
-        CASE (MODE_DEFAULT):
-        {
-            C2N_CAMIDJ_Display_Mode_aout = 0; 
-        }
-        CASE (MODE_AE_AUTO):
-        {
-            C2N_CAMIDJ_Display_Mode_aout = 0; 
-        }
-        CASE (MODE_FOCUS):
-        {
-            C2N_CAMIDJ_Display_Mode_aout = 8; 
-        }
-        CASE (MODE_IRIS):
-        {
-            C2N_CAMIDJ_Display_Mode_aout = 9; 
-        }
+        CASE (MODE_DEFAULT): { C2N_CAMIDJ_Display_Mode_aout = 0; }
+        CASE (MODE_AE_AUTO): { C2N_CAMIDJ_Display_Mode_aout = 0; }
+        CASE (MODE_FOCUS): { C2N_CAMIDJ_Display_Mode_aout = 8; }
+        CASE (MODE_IRIS): { C2N_CAMIDJ_Display_Mode_aout = 9; }
         CASE (MODE_ZOOM_SPEED):
         {
-            C2N_CAMIDJ_Display_Mode_aout = 4; 
-            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nZoomSpeed_Fast, 65535, 7); }
-            ELSE { nDisplayValue = MulDiv(g_nZoomSpeed_Slow, 65535, 7); }
-            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+            C2N_CAMIDJ_Display_Mode_aout = 4;
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nZoomSpeed_Fast_raw; }
+            ELSE { C2N_CAMIDJ_Display_aout = g_nZoomSpeed_Slow_raw; }
         }
         CASE (MODE_PAN_SPEED):
         {
-            C2N_CAMIDJ_Display_Mode_aout = 4; 
-            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nPanSpeed_Fast - 1, 65535, 23); }
-            ELSE { nDisplayValue = MulDiv(g_nPanSpeed_Slow - 1, 65535, 23); }
-            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+            C2N_CAMIDJ_Display_Mode_aout = 4;
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nPanSpeed_Fast_raw; }
+            ELSE { C2N_CAMIDJ_Display_aout = g_nPanSpeed_Slow_raw; }
         }
         CASE (MODE_TILT_SPEED):
         {
-            C2N_CAMIDJ_Display_Mode_aout = 4; 
-            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { nDisplayValue = MulDiv(g_nTiltSpeed_Fast - 1, 65535, 22); }
-            ELSE { nDisplayValue = MulDiv(g_nTiltSpeed_Slow - 1, 65535, 22); }
-            C2N_CAMIDJ_Display_aout = nDisplayValue; 
+            C2N_CAMIDJ_Display_Mode_aout = 4;
+            IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nTiltSpeed_Fast_raw; }
+            ELSE { C2N_CAMIDJ_Display_aout = g_nTiltSpeed_Slow_raw; }
+        }
+    }
+}
+
+// New function to create a recurring WAIT that flashes the focus LED.
+FUNCTION ManualFocusFlasher()
+{
+    // This WAIT will reschedule itself as long as the g_bManualFocusFlashing flag is set.
+    WAIT(50, Focus_Flasher_Loop) // 50 hundredths = 0.5 second interval
+    {
+        IF (g_bManualFocusFlashing = 1)
+        {
+            // Toggle the LED and reschedule the next flash
+            C2N_CAMIDJ_Focus_Button_Is_Active_fb = !C2N_CAMIDJ_Focus_Button_Is_Active_fb;
+            CALL ManualFocusFlasher();
         }
     }
 }
@@ -622,7 +627,6 @@ FUNCTION UpdateActivityTimestamp()
 {
     g_lLastActivityTimestamp = GetHSeconds();
     Debug_fb$ = "CAMIDJ: Activity Timestamp Updated.";
-    Print("CAMIDJ Activity Timestamp Updated to %ld\n", g_lLastActivityTimestamp);
 }
 
 // A recurring check to see if the mode should time out.
@@ -650,7 +654,6 @@ FUNCTION StartModeTimeoutChecker()
             {
                 // Timeout has occurred. Revert to default mode.
                 Debug_fb$ = "CAMIDJ: Mode timed out. Reverting to default.";
-                Print("CAMIDJ Mode Timed Out. Reverting.\n");
                 g_nCAMIDJ_Mode = MODE_DEFAULT;
                 CALL UpdateCAMIDJFeedback();
             }
@@ -743,8 +746,28 @@ FUNCTION ProcessMuteFeedback(STRING data)
 
 FUNCTION ProcessAutoFocusFeedback(STRING data)
 {
-    IF (BYTE(data, 3) = 2) { Is_Auto_Focus_On_fb = 1; }
-    ELSE { Is_Auto_Focus_On_fb = 0; }
+    IF (BYTE(data, 3) = 2) 
+    { 
+        Is_Auto_Focus_On_fb = 1;
+        // If camera confirms Auto Focus is ON, ensure the flasher is stopped.
+        IF (g_bManualFocusFlashing = 1)
+        {
+            g_bManualFocusFlashing = 0;
+            CancelWait(Focus_Flasher_Loop);
+            // After stopping the flasher, update feedback to set the LED state correctly (solid on or off).
+            CALL UpdateCAMIDJFeedback();
+        }
+    }
+    ELSE 
+    { 
+        Is_Auto_Focus_On_fb = 0;
+        // If camera confirms Manual Focus is ON, ensure the flasher is started.
+        IF (g_bManualFocusFlashing = 0)
+        {
+            g_bManualFocusFlashing = 1;
+            CALL ManualFocusFlasher();
+        }
+    }
     Debug_fb$ = "RX: Parsed Auto Focus Feedback";
 }
 
@@ -1067,10 +1090,10 @@ FUNCTION StartIrisRamp(INTEGER nDirection)
     {
         sCmd = "\x01\x04\x0B" + CHR(nDirection);
         CALL SendCommand(sCmd);
-        DELAY(5); // Corrected: Delay reduced from 500ms to 50ms for responsiveness
+        DELAY(MulDiv(C2N_CAMIDJ_Wheel_Rate_ain, 50, 65535));
 	}
 }
-
+  
 // Consolidated function for handling all joystick movement
 FUNCTION ProcessJoystickMovement()
 {
@@ -1080,95 +1103,57 @@ FUNCTION ProcessJoystickMovement()
     INTEGER nMaxPanSpeed, nMaxTiltSpeed, nMaxZoomSpeed;
     INTEGER nCalcPanSpeed, nCalcTiltSpeed, nCalcZoomSpeed;
     INTEGER bIsPanCentered, bIsTiltCentered, bIsZoomCentered;
-
     CALL HandleManualMovementOverrides();
-    CALL UpdateActivityTimestamp(); // Reset timeout on movement start
+    CALL UpdateActivityTimestamp(); 
     Debug_fb$ = "CAMIDJ: Start Joystick Movement";
-
     WHILE (1)
     {
-        // *** MODIFIED: Read from global variables instead of direct analog inputs ***
-        // This ensures we use the values initialized in MAIN() until they are
-        // updated by their respective CHANGE handlers, solving the startup issue.
         nPan = g_nPanPosition;
         nTilt = g_nTiltPosition;
         nZoom = g_nZoomPosition;
              
-        // Break down compound conditions into nested IFs for compiler safety.
-        IF (Abs(nPan - 32768) <= JOYSTICK_DEADBAND)
-        {
-            bIsPanCentered = 1;
-        }
-        ELSE
-        {
-            bIsPanCentered = 0;
-        }
-
-        IF (Abs(nTilt - 32768) <= JOYSTICK_DEADBAND)
-        {
-            bIsTiltCentered = 1;
-        }
-        ELSE
-        {
-            bIsTiltCentered = 0;
-        }
-
-        IF (Abs(nZoom - 32768) <= JOYSTICK_DEADBAND)
-        {
-            bIsZoomCentered = 1;
-        }
-        ELSE
-        {
-            bIsZoomCentered = 0;
-        }
-
-        // Exit loop only if all three axes are centered
-        IF (bIsPanCentered = 1)
-        {
-            IF (bIsTiltCentered = 1)
-            {
-                IF (bIsZoomCentered = 1)
-                {
-                     BREAK;
-                }
-            }
-        }
+        IF (Abs(nPan - 32768) <= JOYSTICK_DEADBAND) { bIsPanCentered = 1; }
+        ELSE { bIsPanCentered = 0; }
+        IF (Abs(nTilt - 32768) <= JOYSTICK_DEADBAND) { bIsTiltCentered = 1; }
+        ELSE { bIsTiltCentered = 0; }
+        IF (Abs(nZoom - 32768) <= JOYSTICK_DEADBAND) { bIsZoomCentered = 1; }
+        ELSE { bIsZoomCentered = 0; }
         
-        CALL UpdateActivityTimestamp(); // Keep resetting timeout while moving
+        IF (bIsPanCentered = 1) { IF (bIsTiltCentered = 1) { IF (bIsZoomCentered = 1) { BREAK; } } }
+        
+        CALL UpdateActivityTimestamp();
 
-        // --- Get Max Speeds ---
+        // --- Get Max Speeds by scaling the stored raw value just-in-time ---
         IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) {
-            nMaxPanSpeed = g_nPanSpeed_Fast;
-            nMaxTiltSpeed = g_nTiltSpeed_Fast;
-            nMaxZoomSpeed = g_nZoomSpeed_Fast;
+            nMaxPanSpeed = MulDiv(g_nPanSpeed_Fast_raw, 23, 65535) + 1;
+            nMaxTiltSpeed = MulDiv(g_nTiltSpeed_Fast_raw, 22, 65535) + 1;
+            nMaxZoomSpeed = MulDiv(g_nZoomSpeed_Fast_raw, 7, 65535);
         } ELSE {
-            nMaxPanSpeed = g_nPanSpeed_Slow;
-            nMaxTiltSpeed = g_nTiltSpeed_Slow;
-            nMaxZoomSpeed = g_nZoomSpeed_Slow;
+            nMaxPanSpeed = MulDiv(g_nPanSpeed_Slow_raw, 23, 65535) + 1;
+            nMaxTiltSpeed = MulDiv(g_nTiltSpeed_Slow_raw, 22, 65535) + 1;
+            nMaxZoomSpeed = MulDiv(g_nZoomSpeed_Slow_raw, 7, 65535);
         }
 
-        // --- Calculate Pan/Tilt State (Corrected for Sony VISCA) ---
-        IF (nPan > (32768 + JOYSTICK_DEADBAND)) { nSonyPanDir = 1; }      // Pan Left 
-        ELSE IF (nPan < (32768 - JOYSTICK_DEADBAND)) { nSonyPanDir = 2; } // Pan Right 
-        ELSE { nSonyPanDir = 3; }                                       // Pan Stop 
+        // --- Calculate Pan/Tilt State ---
+        IF (nPan > (32768 + JOYSTICK_DEADBAND)) { nSonyPanDir = 1; }      
+        ELSE IF (nPan < (32768 - JOYSTICK_DEADBAND)) { nSonyPanDir = 2; }
+        ELSE { nSonyPanDir = 3; }                                       
 
-        IF (nTilt < (32768 - JOYSTICK_DEADBAND)) { nSonyTiltDir = 1; }   // Tilt Up 
-        ELSE IF (nTilt > (32768 + JOYSTICK_DEADBAND)) { nSonyTiltDir = 2; } // Tilt Down 
-        ELSE { nSonyTiltDir = 3; }                                      // Tilt Stop 
+        IF (nTilt < (32768 - JOYSTICK_DEADBAND)) { nSonyTiltDir = 1; }   
+        ELSE IF (nTilt > (32768 + JOYSTICK_DEADBAND)) { nSonyTiltDir = 2; }
+        ELSE { nSonyTiltDir = 3; }                                      
 
         // --- Calculate and Clamp Speeds ---
         nCalcPanSpeed = MulDiv(Abs(nPan - 32768), nMaxPanSpeed, 32767);
-        IF (nCalcPanSpeed > 24) { nCalcPanSpeed = 24; } // Clamp to max pan speed 
-        
+        IF (nCalcPanSpeed > 24) { nCalcPanSpeed = 24; }
         nCalcTiltSpeed = MulDiv(Abs(nTilt - 32768), nMaxTiltSpeed, 32767);
-        IF (nCalcTiltSpeed > 23) { nCalcTiltSpeed = 23; } // Clamp to max tilt speed 
+        IF (nCalcTiltSpeed > 23) { nCalcTiltSpeed = 23; }
         
-        // --- Send Pan/Tilt Command ONLY IF State has Changed ---
+        // --- Send Pan/Tilt Command ---
         IF (nCalcPanSpeed <> g_nLastPanSpeed || nCalcTiltSpeed <> g_nLastTiltSpeed || nSonyPanDir <> g_nLastPanDir || nSonyTiltDir <> g_nLastTiltDir)
         {
             sCmd = "\x01\x06\x01" + CHR(nCalcPanSpeed) + CHR(nCalcTiltSpeed) + CHR(nSonyPanDir) + CHR(nSonyTiltDir);
             CALL SendCommand(sCmd);
-            
             g_nLastPanSpeed = nCalcPanSpeed;
             g_nLastTiltSpeed = nCalcTiltSpeed;
             g_nLastPanDir = nSonyPanDir;
@@ -1177,37 +1162,30 @@ FUNCTION ProcessJoystickMovement()
 
         // --- Calculate Zoom State ---
         nCalcZoomSpeed = MulDiv(Abs(nZoom - 32768), nMaxZoomSpeed, 32767);
-        IF (nCalcZoomSpeed > 7) { nCalcZoomSpeed = 7; } // Clamp to max zoom speed
+        IF (nCalcZoomSpeed > 7) { nCalcZoomSpeed = 7; }
 
-        IF (nZoom > (32768 + JOYSTICK_DEADBAND)) { nZoomDir = 2; }      // Zoom Out (Tele)
-        ELSE IF (nZoom < (32768 - JOYSTICK_DEADBAND)) { nZoomDir = 1; } // Zoom In (Wide)
-        ELSE { nZoomDir = 0; }                                         // Stop
+        IF (nZoom > (32768 + JOYSTICK_DEADBAND)) { nZoomDir = 2; }
+        ELSE IF (nZoom < (32768 - JOYSTICK_DEADBAND)) { nZoomDir = 1; }
+        ELSE { nZoomDir = 0; }
 
-        // --- Send Zoom Command ONLY IF State has Changed ---
+        // --- Send Zoom Command ---
         IF (nCalcZoomSpeed <> g_nLastZoomSpeed || nZoomDir <> g_nLastZoomDir)
         {
-            IF (nZoomDir = 1) { 
-                // Zoom In
-                sCmd = "\x01\x04\x07" + CHR(0x20 + nCalcZoomSpeed);
-            } ELSE IF (nZoomDir = 2) { // Zoom Out
-                sCmd = "\x01\x04\x07" + CHR(0x30 + nCalcZoomSpeed);
-            } ELSE { // Zoom Stop
-                sCmd = "\x01\x04\x07\x00";
-            }
+            IF (nZoomDir = 1) { sCmd = "\x01\x04\x07" + CHR(0x20 + nCalcZoomSpeed); } 
+            ELSE IF (nZoomDir = 2) { sCmd = "\x01\x04\x07" + CHR(0x30 + nCalcZoomSpeed); } 
+            ELSE { sCmd = "\x01\x04\x07\x00"; }
             CALL SendCommand(sCmd);
-
             g_nLastZoomSpeed = nCalcZoomSpeed;
             g_nLastZoomDir = nZoomDir;
         }
-
-        DELAY(5); // Poll at ~20Hz
+        DELAY(5);
     }
 
-    // Send Final Stop Commands when loop is exited
+    // Send Final Stop Commands
     Debug_fb$ = "CAMIDJ: Stop Joystick Movement";
-    SendCommand("\x01\x06\x01\x00\x00\x03\x03"); // Stop Pan/Tilt
+    SendCommand("\x01\x06\x01\x00\x00\x03\x03");
     DELAY(5);
-    SendCommand("\x01\x04\x07\x00");           // Stop Zoom
+    SendCommand("\x01\x04\x07\x00");
 }
 
 FUNCTION CheckJoystickMovement()
@@ -1227,7 +1205,6 @@ FUNCTION CheckJoystickMovement()
 // EVENT HANDLERS
 //================================================================================
 
-// --- Serial RX Handler (UDP Version) ---
 // --- Serial RX Handler (UDP Version) ---
 CHANGE From_Camera_rx$
 {
@@ -2003,19 +1980,44 @@ PUSH Recall_Preset_5_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1,
 PUSH Recall_Preset_6_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 5); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(6);} }
 PUSH Recall_Preset_7_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 6); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(7);} }
 PUSH Recall_Preset_8_trig  { IF(Store_Preset_Active=1){CALL SendPresetCommand(1, 7); Store_Preset_Active=0;} ELSE {CALL SendPresetRecall(8);} }
-
-// --- C2N-CAMIDJ Handlers ---
   
-//***************C2N-CAMIDJ Handlers***************
-
 //***************C2N-CAMIDJ Handlers***************
 
 PUSH C2N_CAMIDJ_Focus_Button_trig
 {
+    CALL UpdateActivityTimestamp();
     g_nCAMIDJ_Mode = MODE_FOCUS;
-    CALL SendCommand("\x01\x04\x38\x03"); // Set to Manual Focus for wheel control
+
+    // Toggle the focus state
+    IF (Is_Auto_Focus_On_fb = 1)
+    {
+        // CURRENT STATE: AUTO -> GOING TO MANUAL
+        Debug_fb$ = "CAMIDJ: Setting Manual Focus";
+        SendCommand("\x01\x04\x38\x03"); 
+        
+        // Start the flashing loop
+        g_bManualFocusFlashing = 1;
+        CancelWait(Focus_Flasher_Loop); // Ensure any old instance is stopped before starting a new one
+        CALL ManualFocusFlasher();
+    }
+    ELSE
+    {
+        // CURRENT STATE: MANUAL -> GOING TO AUTO
+        Debug_fb$ = "CAMIDJ: Setting Auto Focus";
+        SendCommand("\x01\x04\x38\x02");
+        
+        // Stop the flashing loop
+        g_bManualFocusFlashing = 0;
+        CancelWait(Focus_Flasher_Loop);
+    }
+    
+    // *** ADDED THIS LINE ***
+    // Immediately update the display and LEDs to reflect the new Focus mode.
     CALL UpdateCAMIDJFeedback();
-    CALL UpdateActivityTimestamp(); // Start/reset the 30-second timeout
+    
+    // After sending the command, query the camera to confirm the new status
+    DELAY(COMMAND_DELAY_MS);
+    StartQuery("\x04\x38");
 }
 
 PUSH C2N_CAMIDJ_Iris_Manual_Button_trig
@@ -2046,99 +2048,132 @@ PUSH C2N_CAMIDJ_Iris_Auto_Button_trig
     CALL UpdateCAMIDJFeedback();
 }
 
-PUSH C2N_CAMIDJ_Zoom_Button_trig { g_nCAMIDJ_Mode = MODE_ZOOM_SPEED; CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
-PUSH C2N_CAMIDJ_Pan_Button_trig  { g_nCAMIDJ_Mode = MODE_PAN_SPEED;  CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
-PUSH C2N_CAMIDJ_Tilt_Button_trig { g_nCAMIDJ_Mode = MODE_TILT_SPEED; CALL UpdateCAMIDJFeedback(); CALL UpdateActivityTimestamp(); }
+PUSH C2N_CAMIDJ_Zoom_Button_trig 
+{ 
+    g_nCAMIDJ_Mode = MODE_ZOOM_SPEED; 
+    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastZoomSpeedDisplay_raw; }
+    ELSE { C2N_CAMIDJ_Display_aout = g_nLastZoomSpeedDisplay_raw; }
+    CALL UpdateCAMIDJFeedback(); 
+    CALL UpdateActivityTimestamp(); 
+}
+PUSH C2N_CAMIDJ_Pan_Button_trig  
+{ 
+    g_nCAMIDJ_Mode = MODE_PAN_SPEED;  
+    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastPanSpeedDisplay_raw; }
+    ELSE { C2N_CAMIDJ_Display_aout = g_nLastPanSpeedDisplay_raw; }
+    CALL UpdateCAMIDJFeedback(); 
+    CALL UpdateActivityTimestamp(); 
+}
+PUSH C2N_CAMIDJ_Tilt_Button_trig 
+{ 
+    g_nCAMIDJ_Mode = MODE_TILT_SPEED; 
+    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastTiltSpeedDisplay_raw; }
+    ELSE { C2N_CAMIDJ_Display_aout = g_nLastTiltSpeedDisplay_raw; }
+    CALL UpdateCAMIDJFeedback(); 
+    CALL UpdateActivityTimestamp(); 
+}
 
-PUSH C2N_CAMIDJ_Speed_Fast_trig { g_nCAMIDJ_SpeedMode = SPEED_FAST; CALL UpdateCAMIDJFeedback(); }
-PUSH C2N_CAMIDJ_Speed_Slow_trig { g_nCAMIDJ_SpeedMode = SPEED_SLOW; CALL UpdateCAMIDJFeedback(); }
+PUSH C2N_CAMIDJ_Speed_Fast_trig
+{
+    g_nCAMIDJ_SpeedMode = SPEED_FAST;
+    Debug_fb$ = "CAMIDJ: Speed Mode set to FAST.";
+    CALL UpdateCAMIDJFeedback();
+}
+
+PUSH C2N_CAMIDJ_Speed_Slow_trig
+{
+    g_nCAMIDJ_SpeedMode = SPEED_SLOW;
+    Debug_fb$ = "CAMIDJ: Speed Mode set to SLOW.";
+    CALL UpdateCAMIDJFeedback();
+}
 
 PUSH C2N_CAMIDJ_Wheel_Clockwise_trig
 {
-    IF (g_nCAMIDJ_Mode = MODE_DEFAULT) { RETURN; } 
+    // This handler only manages the moving flag and non-speed modes now.
     IF (g_bWheelIsMoving = 1) { RETURN; }
     g_bWheelIsMoving = 1;
-    CALL UpdateActivityTimestamp(); 
-    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x02"); }      // Focus Far
-    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS) { CALL StartIrisRamp(3); }      // Corrected: Iris Down
+    CALL UpdateActivityTimestamp();
+
+    IF (g_nCAMIDJ_Mode = MODE_FOCUS)
+    {
+        SendCommand("\x01\x04\x08\x02"); // Focus Far
+    }
+    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS)
+    {
+        CALL StartIrisRamp(3); // Iris Down
+    }
 }
 
 PUSH C2N_CAMIDJ_Wheel_Counter_Clockwise_trig
 {
-    IF (g_nCAMIDJ_Mode = MODE_DEFAULT) { RETURN; } 
+    // This handler only manages the moving flag and non-speed modes now.
     IF (g_bWheelIsMoving = 1) { RETURN; }
     g_bWheelIsMoving = 1;
-    CALL UpdateActivityTimestamp(); 
-    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x03"); }      // Focus Near
-    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS) { CALL StartIrisRamp(2); }      // Corrected: Iris Up
+    CALL UpdateActivityTimestamp();
+
+    IF (g_nCAMIDJ_Mode = MODE_FOCUS)
+    {
+        SendCommand("\x01\x04\x08\x03"); // Focus Near
+    }
+    ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS)
+    {
+        CALL StartIrisRamp(2); // Iris Up
+    }
 }
 
 PUSH C2N_CAMIDJ_Wheel_Stopped_trig
 {
+    INTEGER nNewRawValue;
+    
     g_bWheelIsMoving = 0;
-    IF (g_nCAMIDJ_Mode = MODE_FOCUS) { SendCommand("\x01\x04\x08\x00"); } // Focus Stop
-    CALL UpdateCAMIDJFeedback(); // Update display with final speed value
-}
-
-CHANGE C2N_CAMIDJ_Speed_Adjust_ain
-{
-    IF (g_bIsProcessingSpeedAdjust = 0)
+    
+    // Check if we are stopping from a speed adjustment mode
+    IF (g_nCAMIDJ_Mode = MODE_PAN_SPEED || g_nCAMIDJ_Mode = MODE_TILT_SPEED || g_nCAMIDJ_Mode = MODE_ZOOM_SPEED)
     {
-        g_bIsProcessingSpeedAdjust = 1;
-        WAIT(5)
+        // Read the final value from the display when the wheel stops
+        nNewRawValue = C2N_CAMIDJ_Speed_Adjust_ain;
+        Debug_fb$ = "Wheel Stopped. Final Speed Value: " + ITOA(nNewRawValue);
+
+        // Update the appropriate stored raw value with this final value
+        SWITCH(g_nCAMIDJ_Mode)
         {
-            INTEGER nNewValue;
-            IF (g_bWheelIsMoving = 1)
+            CASE (MODE_PAN_SPEED):
             {
-                nNewValue = C2N_CAMIDJ_Speed_Adjust_ain;
-                SWITCH(g_nCAMIDJ_Mode)
-                {
-                    CASE (MODE_PAN_SPEED):
-                    {
-                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
-                        {
-                            g_nPanSpeed_Fast = MulDiv(nNewValue, 23, 65535) + 1;
-                            IF (g_nPanSpeed_Fast < g_nPanSpeed_Slow) { g_nPanSpeed_Slow = g_nPanSpeed_Fast; }
-                        }
-                        ELSE
-                        {
-                            g_nPanSpeed_Slow = MulDiv(nNewValue, 23, 65535) + 1;
-                            IF (g_nPanSpeed_Slow > g_nPanSpeed_Fast) { g_nPanSpeed_Fast = g_nPanSpeed_Slow; }
-                        }
-                    }
-                    CASE (MODE_TILT_SPEED):
-                    {
-                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
-                        {
-                            g_nTiltSpeed_Fast = MulDiv(nNewValue, 22, 65535) + 1;
-                            IF (g_nTiltSpeed_Fast < g_nTiltSpeed_Slow) { g_nTiltSpeed_Slow = g_nTiltSpeed_Fast; }
-                        }
-                        ELSE
-                        {
-                            g_nTiltSpeed_Slow = MulDiv(nNewValue, 22, 65535) + 1;
-                            IF (g_nTiltSpeed_Slow > g_nTiltSpeed_Fast) { g_nTiltSpeed_Fast = g_nTiltSpeed_Slow; }
-                        }
-                    }
-                    CASE (MODE_ZOOM_SPEED):
-                    {
-                        IF(g_nCAMIDJ_SpeedMode = SPEED_FAST)
-                        {
-                            g_nZoomSpeed_Fast = MulDiv(nNewValue, 7, 65535);
-                            IF (g_nZoomSpeed_Fast < g_nZoomSpeed_Slow) { g_nZoomSpeed_Slow = g_nZoomSpeed_Fast; }
-                        }
-                        ELSE
-                        {
-                            g_nZoomSpeed_Slow = MulDiv(nNewValue, 7, 65535);
-                            IF (g_nZoomSpeed_Slow > g_nZoomSpeed_Fast) { g_nZoomSpeed_Fast = g_nZoomSpeed_Slow; }
-                        }
-                    }
-                }
+                g_nLastPanSpeedDisplay_raw = nNewRawValue;
+                IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nPanSpeed_Fast_raw = nNewRawValue; }
+                ELSE { g_nPanSpeed_Slow_raw = nNewRawValue; }
             }
-            g_bIsProcessingSpeedAdjust = 0;
+            CASE (MODE_TILT_SPEED):
+            {
+                g_nLastTiltSpeedDisplay_raw = nNewRawValue;
+                IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nTiltSpeed_Fast_raw = nNewRawValue; }
+                ELSE { g_nTiltSpeed_Slow_raw = nNewRawValue; }
+            }
+            CASE (MODE_ZOOM_SPEED):
+            {
+                g_nLastZoomSpeedDisplay_raw = nNewRawValue;
+                IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nZoomSpeed_Fast_raw = nNewRawValue; }
+                ELSE { g_nZoomSpeed_Slow_raw = nNewRawValue; }
+            }
         }
     }
+    ELSE IF (g_nCAMIDJ_Mode = MODE_FOCUS) 
+    { 
+        SendCommand("\x01\x04\x08\x00"); // Focus Stop
+    }
+    
+    g_bIsProcessingWheel = 0;
+}
+CHANGE C2N_CAMIDJ_Speed_Adjust_ain
+{
+    // THIS HANDLER IS NOW INTENTIONALLY LEFT EMPTY.
+    // All logic has been moved to the Wheel_Stopped handler for timing stability.
 }
 
+CHANGE C2N_CAMIDJ_Wheel_Rate_ain
+{
+    // THIS HANDLER IS INTENTIONALLY LEFT EMPTY to prevent conflicts.
+}
 CHANGE C2N_CAMIDJ_Pan_ain
 {
     IF (g_bInitialized = 1)
@@ -2186,44 +2221,48 @@ FUNCTION MAIN()
     g_nPingFailCount = 0;
     g_nMissedPolls = 0;
     g_bIsPolling = 0;
+    g_bManualFocusFlashing = 0; // Initialize new flag
 
     // C2N-CAMIDJ state flags
     g_bJoystickIsActive = 0;
     g_bWheelIsMoving = 0;
     g_bIsProcessingSpeedAdjust = 0;
-    g_nLastZoomSpeed = 0;
+    g_bIsProcessingWheel = 0;
+	g_nLastZoomSpeed = 0;
 	g_nLastZoomDir = 0;
 	g_nLastPanSpeed = 0;
-	g_nLastPanDir = 3; // Corrected: Set to stop state
+	g_nLastPanDir = 3;
 	g_nLastTiltSpeed = 0;
-	g_nLastTiltDir = 3; // Corrected: Set to stop state
+	g_nLastTiltDir = 3;
     g_lMaxSignedLongInt = 2147483647;
-    IF (g_bFirstRun = 0)
+    
+	IF (g_bFirstRun = 0)
     {
         g_bFirstRun = 1;
-        // Speeds initialized to 40% (Slow) and 60% (Fast) of their respective ranges
-        g_nPanSpeed_Slow = 10; g_nPanSpeed_Fast = 15; 
-        g_nTiltSpeed_Slow = 10; g_nTiltSpeed_Fast = 14;
-        g_nZoomSpeed_Slow = 3;  g_nZoomSpeed_Fast = 4;
+        // 40% of 65535 = 26214
+        // 60% of 65535 = 39321
+        g_nPanSpeed_Slow_raw = 26214; 
+        g_nPanSpeed_Fast_raw = 39321; 
+        g_nTiltSpeed_Slow_raw = 26214; 
+        g_nTiltSpeed_Fast_raw = 39321;
+        g_nZoomSpeed_Slow_raw = 26214;
+        g_nZoomSpeed_Fast_raw = 39321;
+        // Initialize the new "last display" variables as well
+        g_nLastPanSpeedDisplay_raw = 26214;
+        g_nLastTiltSpeedDisplay_raw = 26214;
+        g_nLastZoomSpeedDisplay_raw = 26214;
     }
 
     // Start in the default (blank) mode
     g_nCAMIDJ_Mode = MODE_DEFAULT;
-    // Set speed mode to slow by default on startup
     g_nCAMIDJ_SpeedMode = SPEED_SLOW;
-    
-    // ** NEW: Initialize joystick positions to center to prevent startup movement **
     g_nPanPosition = 32768;
     g_nTiltPosition = 32768;
     g_nZoomPosition = 32768;
 
-    // Start the recurring timeout checker loop
     CALL StartModeTimeoutChecker();
-
     Debug_fb$ = "Debug: MAIN() started. Waiting 5s for network to stabilize...";
-    // Start the KeepAliveLoop immediately. It will wait for g_bInitialized = 1.
     CALL KeepAliveLoop();
-    // Start the first initialization attempt after a delay.
     WAIT(500, Initial_Startup_Delay)
     {
         CALL StartInitAttempt();
