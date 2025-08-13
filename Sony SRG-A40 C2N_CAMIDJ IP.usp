@@ -52,6 +52,9 @@ Comments: This module provides comprehensive VISCA over IP control for Sony SRG-
 #DEFINE_CONSTANT MODE_TIMEOUT_S         3000 // 30 seconds (3000 hundredths)
 #DEFINE_CONSTANT MODE_CHECK_INTERVAL    100  // 1 second (100 hundredths) for the checker loop
 
+#DEFINE_CONSTANT MIN_RAMP_DELAY_HS 5     // 50ms minimum delay between commands
+#DEFINE_CONSTANT MAX_RAMP_DELAY_HS 30    // 300ms maximum delay for very slow turning
+
 //================================================================================
 // INPUTS AND OUTPUTS (Organized and Aligned by Function)
 //================================================================================
@@ -261,7 +264,6 @@ Nonvolatile INTEGER g_nCAMIDJ_SpeedMode;
 Nonvolatile INTEGER g_nPanSpeed_Slow_raw, g_nPanSpeed_Fast_raw;
 Nonvolatile INTEGER g_nTiltSpeed_Slow_raw, g_nTiltSpeed_Fast_raw;
 Nonvolatile INTEGER g_nZoomSpeed_Slow_raw, g_nZoomSpeed_Fast_raw;
-Nonvolatile INTEGER g_nLastPanSpeedDisplay_raw, g_nLastTiltSpeedDisplay_raw, g_nLastZoomSpeedDisplay_raw;
 INTEGER g_bJoystickIsActive;
 INTEGER g_bWheelIsMoving;
 INTEGER g_bIsProcessingSpeedAdjust;
@@ -274,7 +276,8 @@ INTEGER g_nLastTiltSpeed;
 INTEGER g_nLastTiltDir;
 INTEGER g_nPanPosition, g_nTiltPosition, g_nZoomPosition;
 SIGNED_LONG_INTEGER g_lLastActivityTimestamp;
-SIGNED_LONG_INTEGER g_lMaxSignedLongInt;         
+SIGNED_LONG_INTEGER g_lMaxSignedLongInt;   
+INTEGER g_nIrisRampDirection; // 2=Up, 3=Down      
 
 //================================================================================
 // HELPER FUNCTIONS
@@ -1079,20 +1082,6 @@ FUNCTION ParseResponse(STRING sResponse)
 }
 
 //******************C2N-CAMIDJ Functions******************
-
-
-
-// Ramps the iris up or down at a controlled pace
-FUNCTION StartIrisRamp(INTEGER nDirection)
-{
-    STRING sCmd[10];
-    WHILE (g_bWheelIsMoving = 1)
-    {
-        sCmd = "\x01\x04\x0B" + CHR(nDirection);
-        CALL SendCommand(sCmd);
-        DELAY(MulDiv(C2N_CAMIDJ_Wheel_Rate_ain, 50, 65535));
-	}
-}
   
 // Consolidated function for handling all joystick movement
 FUNCTION ProcessJoystickMovement()
@@ -1195,6 +1184,39 @@ FUNCTION CheckJoystickMovement()
         g_bJoystickIsActive = 1;
         CALL ProcessJoystickMovement();
         g_bJoystickIsActive = 0;
+    }
+}
+
+FUNCTION RampIris()
+{
+    // Declare all local variables at the top of the function
+    // to satisfy the compiler[cite: 71, 72].
+    STRING sCmd[10];
+    SIGNED_INTEGER nDelay;
+
+    // This is the loop's exit condition. If the flag is cleared by Wheel_Stopped,
+    // the loop will not retrigger itself.
+    IF (g_bWheelIsMoving = 1)
+    {
+        // 1. Construct the command string in a separate, explicit step
+        // to avoid compiler parsing errors with inline concatenation[cite: 46, 80].
+        sCmd = "\x01\x04\x0B" + CHR(g_nIrisRampDirection);
+        
+        // 2. Pass the simple variable to the SendCommand function.
+        CALL SendCommand(sCmd);
+        
+        // Calculate the next delay. A faster spin (higher Wheel_Rate) results in a shorter delay.
+        // We subtract the rate from the max delay to invert the relationship.
+        nDelay = MAX_RAMP_DELAY_HS - MulDiv(Abs(C2N_CAMIDJ_Wheel_Rate_ain - 32768), (MAX_RAMP_DELAY_HS - MIN_RAMP_DELAY_HS), 32767);
+        
+        // Ensure the delay is within our defined bounds.
+        IF (nDelay < MIN_RAMP_DELAY_HS) { nDelay = MIN_RAMP_DELAY_HS; }
+        
+        // Schedule this function to run again after the calculated delay.
+        WAIT(nDelay, Iris_Ramp_Wait)
+        {
+            CALL RampIris();
+        }
     }
 }
 
@@ -2050,27 +2072,26 @@ PUSH C2N_CAMIDJ_Iris_Auto_Button_trig
 
 PUSH C2N_CAMIDJ_Zoom_Button_trig 
 { 
+    Debug_fb$ = "CAMIDJ: Zoom Speed Mode Selected";
     g_nCAMIDJ_Mode = MODE_ZOOM_SPEED; 
-    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastZoomSpeedDisplay_raw; }
-    ELSE { C2N_CAMIDJ_Display_aout = g_nLastZoomSpeedDisplay_raw; }
     CALL UpdateCAMIDJFeedback(); 
-    CALL UpdateActivityTimestamp(); 
+    CALL UpdateActivityTimestamp();
 }
+
 PUSH C2N_CAMIDJ_Pan_Button_trig  
 { 
+    Debug_fb$ = "CAMIDJ: Pan Speed Mode Selected";
     g_nCAMIDJ_Mode = MODE_PAN_SPEED;  
-    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastPanSpeedDisplay_raw; }
-    ELSE { C2N_CAMIDJ_Display_aout = g_nLastPanSpeedDisplay_raw; }
     CALL UpdateCAMIDJFeedback(); 
-    CALL UpdateActivityTimestamp(); 
+    CALL UpdateActivityTimestamp();
 }
+
 PUSH C2N_CAMIDJ_Tilt_Button_trig 
 { 
+    Debug_fb$ = "CAMIDJ: Tilt Speed Mode Selected";
     g_nCAMIDJ_Mode = MODE_TILT_SPEED; 
-    IF (g_nCAMIDJ_SpeedMode = SPEED_FAST) { C2N_CAMIDJ_Display_aout = g_nLastTiltSpeedDisplay_raw; }
-    ELSE { C2N_CAMIDJ_Display_aout = g_nLastTiltSpeedDisplay_raw; }
     CALL UpdateCAMIDJFeedback(); 
-    CALL UpdateActivityTimestamp(); 
+    CALL UpdateActivityTimestamp();
 }
 
 PUSH C2N_CAMIDJ_Speed_Fast_trig
@@ -2089,35 +2110,51 @@ PUSH C2N_CAMIDJ_Speed_Slow_trig
 
 PUSH C2N_CAMIDJ_Wheel_Clockwise_trig
 {
-    // This handler only manages the moving flag and non-speed modes now.
-    IF (g_bWheelIsMoving = 1) { RETURN; }
-    g_bWheelIsMoving = 1;
     CALL UpdateActivityTimestamp();
 
     IF (g_nCAMIDJ_Mode = MODE_FOCUS)
     {
-        SendCommand("\x01\x04\x08\x02"); // Focus Far
+        IF (g_bWheelIsMoving = 0)
+        {
+            g_bWheelIsMoving = 1;
+            Debug_fb$ = "CAMIDJ: Wheel CW > Focus Far START";
+            SendCommand("\x01\x04\x08\x02"); // Focus Far
+        }
     }
     ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS)
     {
-        CALL StartIrisRamp(3); // Iris Down
+        IF (g_bWheelIsMoving = 0)
+        {
+            g_bWheelIsMoving = 1;
+            g_nIrisRampDirection = 3; // Iris Down
+            Debug_fb$ = "CAMIDJ: Wheel CW > Iris Down RAMP START";
+            CALL RampIris(); // Start the ramping loop
+        }
     }
 }
 
 PUSH C2N_CAMIDJ_Wheel_Counter_Clockwise_trig
 {
-    // This handler only manages the moving flag and non-speed modes now.
-    IF (g_bWheelIsMoving = 1) { RETURN; }
-    g_bWheelIsMoving = 1;
     CALL UpdateActivityTimestamp();
 
     IF (g_nCAMIDJ_Mode = MODE_FOCUS)
     {
-        SendCommand("\x01\x04\x08\x03"); // Focus Near
+        IF (g_bWheelIsMoving = 0)
+        {
+            g_bWheelIsMoving = 1;
+            Debug_fb$ = "CAMIDJ: Wheel CCW > Focus Near START";
+            SendCommand("\x01\x04\x08\x03"); // Focus Near
+        }
     }
     ELSE IF (g_nCAMIDJ_Mode = MODE_IRIS)
     {
-        CALL StartIrisRamp(2); // Iris Up
+        IF (g_bWheelIsMoving = 0)
+        {
+            g_bWheelIsMoving = 1;
+            g_nIrisRampDirection = 2; // Iris Up
+            Debug_fb$ = "CAMIDJ: Wheel CCW > Iris Up RAMP START";
+            CALL RampIris(); // Start the ramping loop
+        }
     }
 }
 
@@ -2125,45 +2162,46 @@ PUSH C2N_CAMIDJ_Wheel_Stopped_trig
 {
     INTEGER nNewRawValue;
     
-    g_bWheelIsMoving = 0;
+    // This check now primarily applies to continuous actions like focus ramping.
+    IF (g_bWheelIsMoving = 1)
+    {
+        Debug_fb$ = "CAMIDJ: Wheel Stopped > Focus STOP";
+        SendCommand("\x01\x04\x08\x00"); // Focus Stop
+    }
+
+    g_bWheelIsMoving = 0; // Clear the flag for all modes.
     
     // Check if we are stopping from a speed adjustment mode
     IF (g_nCAMIDJ_Mode = MODE_PAN_SPEED || g_nCAMIDJ_Mode = MODE_TILT_SPEED || g_nCAMIDJ_Mode = MODE_ZOOM_SPEED)
     {
         // Read the final value from the display when the wheel stops
         nNewRawValue = C2N_CAMIDJ_Speed_Adjust_ain;
-        Debug_fb$ = "Wheel Stopped. Final Speed Value: " + ITOA(nNewRawValue);
+        MAKESTRING(Debug_fb$, "Wheel Stopped. Final Speed Value: %d", nNewRawValue);
 
         // Update the appropriate stored raw value with this final value
         SWITCH(g_nCAMIDJ_Mode)
         {
             CASE (MODE_PAN_SPEED):
             {
-                g_nLastPanSpeedDisplay_raw = nNewRawValue;
                 IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nPanSpeed_Fast_raw = nNewRawValue; }
                 ELSE { g_nPanSpeed_Slow_raw = nNewRawValue; }
             }
             CASE (MODE_TILT_SPEED):
             {
-                g_nLastTiltSpeedDisplay_raw = nNewRawValue;
                 IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nTiltSpeed_Fast_raw = nNewRawValue; }
                 ELSE { g_nTiltSpeed_Slow_raw = nNewRawValue; }
             }
             CASE (MODE_ZOOM_SPEED):
             {
-                g_nLastZoomSpeedDisplay_raw = nNewRawValue;
                 IF(g_nCAMIDJ_SpeedMode = SPEED_FAST) { g_nZoomSpeed_Fast_raw = nNewRawValue; }
                 ELSE { g_nZoomSpeed_Slow_raw = nNewRawValue; }
             }
         }
     }
-    ELSE IF (g_nCAMIDJ_Mode = MODE_FOCUS) 
-    { 
-        SendCommand("\x01\x04\x08\x00"); // Focus Stop
-    }
     
     g_bIsProcessingWheel = 0;
 }
+
 CHANGE C2N_CAMIDJ_Speed_Adjust_ain
 {
     // THIS HANDLER IS NOW INTENTIONALLY LEFT EMPTY.
@@ -2247,10 +2285,6 @@ FUNCTION MAIN()
         g_nTiltSpeed_Fast_raw = 39321;
         g_nZoomSpeed_Slow_raw = 26214;
         g_nZoomSpeed_Fast_raw = 39321;
-        // Initialize the new "last display" variables as well
-        g_nLastPanSpeedDisplay_raw = 26214;
-        g_nLastTiltSpeedDisplay_raw = 26214;
-        g_nLastZoomSpeedDisplay_raw = 26214;
     }
 
     // Start in the default (blank) mode
